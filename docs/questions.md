@@ -70,3 +70,9 @@
 **Question:** The prompt allows users to export their data and request account deletion with a 30-day retention hold for financial records but does not specify the export format or exact deletion behavior for non-financial data.
 **Assumption:** Export is provided as JSON; personal data is removed immediately while financial and audit records are retained for the required period.
 **Solution:** Implemented JSON export functionality and a two-stage deletion process: immediate removal of PII with a `pending_purge` flag, followed by scheduled purge of transaction records after 30 days.
+
+
+## 12. Caching Infrastructure
+**Question**: The prompt requires search query caching with a 10-minute TTL but does not specify the underlying technology or architectural approach.
+**Assumption**: A dedicated in-memory data store is the most reliable way to handle the local trending-keyword table and query results without increasing the memory overhead of the Express server itself.
+**Solution**: Integrated Redis as the caching engine to manage search result persistence and the hourly trending-keyword updates, leveraging native TTL (Time-To-Live) commands to enforce the 10-minute expiration rule.
