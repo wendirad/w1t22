@@ -46,7 +46,7 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="input-field"
-              placeholder="admin@motorlot.com"
+              placeholder="you@example.com"
               required
             />
           </div>
@@ -75,28 +75,6 @@ export default function LoginPage() {
             </Link>
           </div>
 
-          <div className="border-t pt-4">
-            <p className="text-xs text-gray-400 text-center mb-2">Test Accounts</p>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              {[
-                { label: 'Admin', email: 'admin@motorlot.com', pass: 'admin123' },
-                { label: 'Staff', email: 'staff@motorlot.com', pass: 'staff123' },
-                { label: 'Finance', email: 'finance@motorlot.com', pass: 'finance123' },
-                { label: 'Buyer', email: 'buyer@motorlot.com', pass: 'buyer123' },
-              ].map((acc) => (
-                <button
-                  key={acc.label}
-                  type="button"
-                  onClick={() => { setEmail(acc.email); setPassword(acc.pass); }}
-                  className="text-left p-2 rounded border border-gray-200 hover:bg-gray-50 transition-colors"
-                >
-                  <span className="font-medium text-gray-700">{acc.label}</span>
-                  <br />
-                  <span className="text-gray-400">{acc.email}</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </form>
       </div>
     </div>

@@ -16,6 +16,8 @@ A full-stack offline-first dealership management system for vehicle discovery, c
 docker compose up
 ```
 
+All secrets and account credentials are configured via the `.env` file in the project root. A default `.env` is provided for development; copy `.env.example` and set your own values for production.
+
 This single command starts all services:
 
 | Service  | URL                           | Description          |
@@ -25,17 +27,36 @@ This single command starts all services:
 | MongoDB  | localhost:27017               | Database             |
 | Redis    | localhost:6379                | Cache                |
 
+## Configuration
+
+All secrets and credentials are externalized to `.env`. See `.env.example` for the full list.
+
+| Variable               | Description                                      |
+|------------------------|--------------------------------------------------|
+| `JWT_SECRET`           | Secret key for signing access tokens              |
+| `JWT_REFRESH_SECRET`   | Secret key for signing refresh tokens             |
+| `HMAC_SECRET`          | Shared secret for HMAC request signing            |
+| `MASTER_ENCRYPTION_KEY`| 64-hex-char key for AES-256 encryption at rest    |
+| `ADMIN_EMAIL`          | Email for the seeded admin account                |
+| `ADMIN_PASSWORD`       | Password for the seeded admin account             |
+| `STAFF_EMAIL`          | Email for the seeded dealership staff account     |
+| `STAFF_PASSWORD`       | Password for the seeded dealership staff account  |
+| `FINANCE_EMAIL`        | Email for the seeded finance reviewer account     |
+| `FINANCE_PASSWORD`     | Password for the seeded finance reviewer account  |
+| `BUYER_EMAIL`          | Email for the seeded buyer account                |
+| `BUYER_PASSWORD`       | Password for the seeded buyer account             |
+
 ## Verification
 
 1. Open **http://localhost:3000** in your browser
-2. Log in with one of the test accounts:
+2. Log in with the credentials configured in your `.env` file (default accounts below):
 
-| Role             | Email                  | Password   |
-|------------------|------------------------|------------|
-| Admin            | admin@motorlot.com     | admin123   |
-| Dealership Staff | staff@motorlot.com     | staff123   |
-| Finance Reviewer | finance@motorlot.com   | finance123 |
-| Buyer            | buyer@motorlot.com     | buyer123   |
+| Role             | Email (default)        | Password (default)         |
+|------------------|------------------------|----------------------------|
+| Admin            | admin@motorlot.com     | MotorLot@Admin2024!        |
+| Dealership Staff | staff@motorlot.com     | MotorLot@Staff2024!        |
+| Finance Reviewer | finance@motorlot.com   | MotorLot@Finance2024!      |
+| Buyer            | buyer@motorlot.com     | MotorLot@Buyer2024!        |
 
 3. As a **Buyer**: Search vehicles, add to cart, checkout to create orders
 4. As **Staff**: Transition orders (Reserve → Invoice → Settle → Fulfill), upload documents

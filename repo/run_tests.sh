@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# Load environment variables if .env file exists
+if [ -f .env ]; then
+  set -a
+  source .env
+  set +a
+fi
+
 echo "========================================"
 echo "  MotorLot DealerOps - Test Runner"
 echo "========================================"

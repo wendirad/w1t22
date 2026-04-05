@@ -4,12 +4,18 @@ import { Vehicle } from '../models/vehicle.model';
 import { Synonym } from '../models/synonym.model';
 import { TaxRate } from '../models/tax-rate.model';
 import { Role, VehicleStatus } from '../types/enums';
+import config from '../config';
 import logger from '../lib/logger';
 
 export async function runSeeds(): Promise<void> {
   const userCount = await User.countDocuments();
   if (userCount > 0) {
     logger.info('Database already seeded, skipping');
+    return;
+  }
+
+  if (!config.seed.adminEmail || !config.seed.adminPassword) {
+    logger.warn('ADMIN_EMAIL or ADMIN_PASSWORD not set, skipping user seed');
     return;
   }
 
@@ -40,36 +46,47 @@ export async function runSeeds(): Promise<void> {
   });
 
   const admin = await User.create({
-    email: 'admin@motorlot.com',
-    passwordHash: 'admin123',
+    email: config.seed.adminEmail,
+    passwordHash: config.seed.adminPassword,
     role: Role.ADMIN,
     dealershipId: null,
-    profile: { firstName: 'Admin', lastName: 'User' },
+    profile: { firstName: config.seed.adminFirstName, lastName: config.seed.adminLastName },
   });
 
-  const staff = await User.create({
-    email: 'staff@motorlot.com',
-    passwordHash: 'staff123',
-    role: Role.DEALERSHIP_STAFF,
-    dealershipId: dealership._id,
-    profile: { firstName: 'John', lastName: 'Staff' },
-  });
+  let usersCreated = 1;
 
-  const finance = await User.create({
-    email: 'finance@motorlot.com',
-    passwordHash: 'finance123',
-    role: Role.FINANCE_REVIEWER,
-    dealershipId: dealership._id,
-    profile: { firstName: 'Jane', lastName: 'Finance' },
-  });
+  if (config.seed.staffEmail && config.seed.staffPassword) {
+    await User.create({
+      email: config.seed.staffEmail,
+      passwordHash: config.seed.staffPassword,
+      role: Role.DEALERSHIP_STAFF,
+      dealershipId: dealership._id,
+      profile: { firstName: config.seed.staffFirstName, lastName: config.seed.staffLastName },
+    });
+    usersCreated++;
+  }
 
-  const buyer = await User.create({
-    email: 'buyer@motorlot.com',
-    passwordHash: 'buyer123',
-    role: Role.BUYER,
-    dealershipId: dealership._id,
-    profile: { firstName: 'Bob', lastName: 'Buyer', phone: '555-0100', driversLicense: 'DL123456789' },
-  });
+  if (config.seed.financeEmail && config.seed.financePassword) {
+    await User.create({
+      email: config.seed.financeEmail,
+      passwordHash: config.seed.financePassword,
+      role: Role.FINANCE_REVIEWER,
+      dealershipId: dealership._id,
+      profile: { firstName: config.seed.financeFirstName, lastName: config.seed.financeLastName },
+    });
+    usersCreated++;
+  }
+
+  if (config.seed.buyerEmail && config.seed.buyerPassword) {
+    await User.create({
+      email: config.seed.buyerEmail,
+      passwordHash: config.seed.buyerPassword,
+      role: Role.BUYER,
+      dealershipId: dealership._id,
+      profile: { firstName: config.seed.buyerFirstName, lastName: config.seed.buyerLastName },
+    });
+    usersCreated++;
+  }
 
   const vehicles = await Vehicle.insertMany([
     {
@@ -224,7 +241,7 @@ export async function runSeeds(): Promise<void> {
   logger.info(
     {
       dealerships: 2,
-      users: 4,
+      users: usersCreated,
       vehicles: vehicles.length,
       synonyms: 7,
       taxRates: 6,

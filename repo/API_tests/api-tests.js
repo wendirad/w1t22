@@ -1,6 +1,15 @@
 const http = require('http');
 
 const BASE_URL = process.env.API_URL || 'http://localhost:5000';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@motorlot.com';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'MotorLot@Admin2024!';
+const STAFF_EMAIL = process.env.STAFF_EMAIL || 'staff@motorlot.com';
+const STAFF_PASSWORD = process.env.STAFF_PASSWORD || 'MotorLot@Staff2024!';
+const BUYER_EMAIL = process.env.BUYER_EMAIL || 'buyer@motorlot.com';
+const BUYER_PASSWORD = process.env.BUYER_PASSWORD || 'MotorLot@Buyer2024!';
+const FINANCE_EMAIL = process.env.FINANCE_EMAIL || 'finance@motorlot.com';
+const FINANCE_PASSWORD = process.env.FINANCE_PASSWORD || 'MotorLot@Finance2024!';
+
 let passed = 0;
 let failed = 0;
 let adminToken = '';
@@ -74,7 +83,7 @@ async function runTests() {
   console.log('--- Auth ---');
   await test('POST /auth/login with admin', async () => {
     const res = await request('POST', '/api/v1/auth/login', {
-      email: 'admin@motorlot.com', password: 'admin123',
+      email: ADMIN_EMAIL, password: ADMIN_PASSWORD,
     });
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     assert(res.data.accessToken, 'Expected access token');
@@ -84,7 +93,7 @@ async function runTests() {
 
   await test('POST /auth/login with staff', async () => {
     const res = await request('POST', '/api/v1/auth/login', {
-      email: 'staff@motorlot.com', password: 'staff123',
+      email: STAFF_EMAIL, password: STAFF_PASSWORD,
     });
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     staffToken = res.data.accessToken;
@@ -92,7 +101,7 @@ async function runTests() {
 
   await test('POST /auth/login with buyer', async () => {
     const res = await request('POST', '/api/v1/auth/login', {
-      email: 'buyer@motorlot.com', password: 'buyer123',
+      email: BUYER_EMAIL, password: BUYER_PASSWORD,
     });
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     buyerToken = res.data.accessToken;
@@ -100,7 +109,7 @@ async function runTests() {
 
   await test('POST /auth/login with finance', async () => {
     const res = await request('POST', '/api/v1/auth/login', {
-      email: 'finance@motorlot.com', password: 'finance123',
+      email: FINANCE_EMAIL, password: FINANCE_PASSWORD,
     });
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     financeToken = res.data.accessToken;
@@ -108,7 +117,7 @@ async function runTests() {
 
   await test('POST /auth/login with wrong password returns 401', async () => {
     const res = await request('POST', '/api/v1/auth/login', {
-      email: 'admin@motorlot.com', password: 'wrongpass',
+      email: ADMIN_EMAIL, password: 'wrongpass',
     });
     assert(res.status === 401, `Expected 401, got ${res.status}`);
     assert(res.data.code === 401, 'Expected error code 401');
@@ -122,7 +131,7 @@ async function runTests() {
   await test('GET /auth/me returns user profile', async () => {
     const res = await request('GET', '/api/v1/auth/me', null, adminToken);
     assert(res.status === 200, `Expected 200, got ${res.status}`);
-    assert(res.data.email === 'admin@motorlot.com', 'Expected admin email');
+    assert(res.data.email === ADMIN_EMAIL, 'Expected admin email');
   });
 
   await test('POST /auth/register creates new user', async () => {
@@ -136,7 +145,7 @@ async function runTests() {
 
   await test('POST /auth/register rejects duplicate email', async () => {
     const res = await request('POST', '/api/v1/auth/register', {
-      email: 'admin@motorlot.com', password: 'test123',
+      email: ADMIN_EMAIL, password: 'test123',
       firstName: 'Dup', lastName: 'User',
     });
     assert(res.status === 409, `Expected 409, got ${res.status}`);
