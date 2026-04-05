@@ -3,29 +3,34 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import httpClient from '../../../shared/api/httpClient';
 import { formatCurrency, formatDate } from '../../../shared/utils/formatCurrency';
 import { useAuth } from '../../auth/context/AuthContext';
+import { useDealership } from '../../../shared/hooks/useDealership';
 import Spinner from '../../../shared/components/ui/Spinner';
 import ErrorMessage from '../../../shared/components/ui/ErrorMessage';
 import Modal from '../../../shared/components/ui/Modal';
+import DealershipSelector from '../../../shared/components/ui/DealershipSelector';
 
 export default function FinancePage() {
   const { user } = useAuth();
+  const { dealershipId, dealerships, selectedDealershipId, setSelectedDealershipId, needsSelection } = useDealership();
   const queryClient = useQueryClient();
   const [paymentModal, setPaymentModal] = useState<any>(null);
   const [paymentForm, setPaymentForm] = useState({ method: 'cash', amount: 0 });
   const [selectedOrderId, setSelectedOrderId] = useState('');
 
+  const dealershipParam = dealershipId ? `&dealershipId=${dealershipId}` : '';
+
   const { data: orders } = useQuery({
-    queryKey: ['orders-invoiced'],
-    queryFn: () => httpClient.get('/orders?status=invoiced').then((r) => r.data),
+    queryKey: ['orders-invoiced', dealershipId],
+    queryFn: () => httpClient.get(`/orders?status=invoiced${dealershipParam}`).then((r) => r.data),
   });
 
   const { data: walletData, isLoading: walletLoading } = useQuery({
-    queryKey: ['wallet'],
+    queryKey: ['wallet', dealershipId],
     queryFn: () => httpClient.get('/finance/wallet/balance').then((r) => r.data),
   });
 
   const { data: historyData } = useQuery({
-    queryKey: ['wallet-history'],
+    queryKey: ['wallet-history', dealershipId],
     queryFn: () => httpClient.get('/finance/wallet/history').then((r) => r.data),
   });
 
@@ -64,6 +69,14 @@ export default function FinancePage() {
 
   return (
     <div>
+      {needsSelection && (
+        <DealershipSelector
+          dealerships={dealerships}
+          value={selectedDealershipId}
+          onChange={setSelectedDealershipId}
+        />
+      )}
+
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Finance</h1>
         {user?.role === 'admin' && (

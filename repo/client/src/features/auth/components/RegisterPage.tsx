@@ -14,7 +14,7 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    httpClient.get('/admin/dealerships').then(({ data }) => setDealerships(data)).catch(() => {});
+    httpClient.get('/dealerships').then(({ data }) => setDealerships(data)).catch(() => {});
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {

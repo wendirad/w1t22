@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { Dealership } from '../models/dealership.model';
 import authRoutes from './auth.routes';
 import vehiclesRoutes from './vehicles.routes';
 import searchRoutes from './search.routes';
@@ -14,6 +15,15 @@ const router = Router();
 
 router.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+router.get('/dealerships', async (_req, res, next) => {
+  try {
+    const dealerships = await Dealership.find({ isActive: true }).select('name region');
+    res.json(dealerships);
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.use('/auth', authRoutes);

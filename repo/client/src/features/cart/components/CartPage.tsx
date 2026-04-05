@@ -3,24 +3,27 @@ import { useNavigate } from 'react-router-dom';
 import httpClient from '../../../shared/api/httpClient';
 import { formatCurrency } from '../../../shared/utils/formatCurrency';
 import { useAuth } from '../../auth/context/AuthContext';
+import { useDealership } from '../../../shared/hooks/useDealership';
 import Spinner from '../../../shared/components/ui/Spinner';
 import ErrorMessage from '../../../shared/components/ui/ErrorMessage';
-import { v4 as uuidv4 } from 'react-router-dom';
+import DealershipSelector from '../../../shared/components/ui/DealershipSelector';
 import { useState } from 'react';
 
 export default function CartPage() {
   const { user } = useAuth();
+  const { dealershipId, dealerships, selectedDealershipId, setSelectedDealershipId, needsSelection } = useDealership();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [checkoutError, setCheckoutError] = useState('');
 
   const { data: cart, isLoading, error, refetch } = useQuery({
-    queryKey: ['cart'],
-    queryFn: () => httpClient.get('/cart').then((r) => r.data),
+    queryKey: ['cart', dealershipId],
+    queryFn: () => httpClient.get(`/cart?dealershipId=${dealershipId}`).then((r) => r.data),
+    enabled: !!dealershipId,
   });
 
   const removeItem = useMutation({
-    mutationFn: (vehicleId: string) => httpClient.delete(`/cart/items/${vehicleId}`),
+    mutationFn: (vehicleId: string) => httpClient.delete(`/cart/items/${vehicleId}?dealershipId=${dealershipId}`),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['cart'] }); },
   });
 
@@ -28,6 +31,7 @@ export default function CartPage() {
     mutationFn: () =>
       httpClient.post('/orders', {
         idempotencyKey: `checkout-${user?._id}-${Date.now()}`,
+        dealershipId,
       }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['cart'] });
@@ -52,6 +56,14 @@ export default function CartPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Shopping Cart</h1>
+
+      {needsSelection && (
+        <DealershipSelector
+          dealerships={dealerships}
+          value={selectedDealershipId}
+          onChange={setSelectedDealershipId}
+        />
+      )}
 
       {items.length === 0 ? (
         <div className="card text-center py-12">
