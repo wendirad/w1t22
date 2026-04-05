@@ -3,6 +3,7 @@ import * as documentService from '../services/document/document.service';
 import { checkPermission } from '../services/permission.service';
 import { ForbiddenError } from '../lib/errors';
 import { parsePaginationParams } from '../lib/pagination';
+import { logAuditEvent } from '../services/audit.service';
 
 export async function uploadDocument(req: Request, res: Response, next: NextFunction) {
   try {
@@ -19,6 +20,18 @@ export async function uploadDocument(req: Request, res: Response, next: NextFunc
       orderId: req.body.orderId,
       vehicleId: req.body.vehicleId,
       sensitiveFlag: req.body.sensitiveFlag === 'true',
+    });
+
+    await logAuditEvent({
+      dealershipId,
+      userId: req.user!.id,
+      role: req.user!.role,
+      ip: req.ip || '',
+      action: 'document.upload',
+      resourceType: 'document',
+      resourceId: doc._id?.toString() || '',
+      after: { filename: doc.originalFilename, type: doc.type, sensitiveFlag: doc.sensitiveFlag, quarantined: doc.quarantined },
+      requestId: (req as any).requestId,
     });
 
     res.status(201).json(doc);
@@ -110,7 +123,175 @@ export async function deleteDocument(req: Request, res: Response, next: NextFunc
     if (!hasPermission) throw new ForbiddenError('No permission to delete this document');
 
     await documentService.deleteDocument(req.params.id, req.user!.id);
+    await logAuditEvent({
+      dealershipId,
+      userId: req.user!.id,
+      role: req.user!.role,
+      ip: req.ip || '',
+      action: 'document.delete',
+      resourceType: 'document',
+      resourceId: req.params.id,
+      before: { filename: doc.originalFilename, type: doc.type },
+      requestId: (req as any).requestId,
+    });
     res.json({ msg: 'Document deleted' });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function editDocument(req: Request, res: Response, next: NextFunction) {
+  try {
+    const doc = await documentService.getDocument(req.params.id);
+    const dealershipId = doc.dealershipId.toString();
+
+    const hasPermission = await checkPermission(
+      req.user!.id,
+      req.user!.role,
+      dealershipId,
+      'document',
+      doc._id.toString(),
+      'write',
+      doc.sensitiveFlag
+    );
+
+    if (!hasPermission) throw new ForbiddenError('No permission to edit this document');
+
+    const updated = await documentService.updateDocumentMetadata(req.params.id, {
+      type: req.body.type,
+      orderId: req.body.orderId,
+      vehicleId: req.body.vehicleId,
+      sensitiveFlag: req.body.sensitiveFlag,
+    });
+
+    await logAuditEvent({
+      dealershipId,
+      userId: req.user!.id,
+      role: req.user!.role,
+      ip: req.ip || '',
+      action: 'document.edit',
+      resourceType: 'document',
+      resourceId: req.params.id,
+      before: { type: doc.type, orderId: doc.orderId, vehicleId: doc.vehicleId },
+      after: { type: updated.type, orderId: updated.orderId, vehicleId: updated.vehicleId },
+      requestId: (req as any).requestId,
+    });
+
+    res.json(updated);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function shareDocument(req: Request, res: Response, next: NextFunction) {
+  try {
+    const doc = await documentService.getDocument(req.params.id);
+    const dealershipId = doc.dealershipId.toString();
+
+    const hasPermission = await checkPermission(
+      req.user!.id,
+      req.user!.role,
+      dealershipId,
+      'document',
+      doc._id.toString(),
+      'share',
+      doc.sensitiveFlag
+    );
+
+    if (!hasPermission) throw new ForbiddenError('No permission to share this document');
+
+    const updated = await documentService.shareDocument(req.params.id, {
+      targetUserId: req.body.targetUserId,
+      actions: req.body.actions || ['read', 'download'],
+    });
+
+    await logAuditEvent({
+      dealershipId,
+      userId: req.user!.id,
+      role: req.user!.role,
+      ip: req.ip || '',
+      action: 'document.share',
+      resourceType: 'document',
+      resourceId: req.params.id,
+      after: { sharedWith: req.body.targetUserId, actions: req.body.actions },
+      requestId: (req as any).requestId,
+    });
+
+    res.json(updated);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function submitDocument(req: Request, res: Response, next: NextFunction) {
+  try {
+    const doc = await documentService.getDocument(req.params.id);
+    const dealershipId = doc.dealershipId.toString();
+
+    const hasPermission = await checkPermission(
+      req.user!.id,
+      req.user!.role,
+      dealershipId,
+      'document',
+      doc._id.toString(),
+      'submit',
+      doc.sensitiveFlag
+    );
+
+    if (!hasPermission) throw new ForbiddenError('No permission to submit this document');
+
+    const updated = await documentService.transitionDocumentStatus(req.params.id, 'submitted', req.user!.id);
+
+    await logAuditEvent({
+      dealershipId,
+      userId: req.user!.id,
+      role: req.user!.role,
+      ip: req.ip || '',
+      action: 'document.submit',
+      resourceType: 'document',
+      resourceId: req.params.id,
+      after: { status: 'submitted' },
+      requestId: (req as any).requestId,
+    });
+
+    res.json(updated);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function approveDocument(req: Request, res: Response, next: NextFunction) {
+  try {
+    const doc = await documentService.getDocument(req.params.id);
+    const dealershipId = doc.dealershipId.toString();
+
+    const hasPermission = await checkPermission(
+      req.user!.id,
+      req.user!.role,
+      dealershipId,
+      'document',
+      doc._id.toString(),
+      'approve',
+      doc.sensitiveFlag
+    );
+
+    if (!hasPermission) throw new ForbiddenError('No permission to approve this document');
+
+    const updated = await documentService.transitionDocumentStatus(req.params.id, 'approved', req.user!.id);
+
+    await logAuditEvent({
+      dealershipId,
+      userId: req.user!.id,
+      role: req.user!.role,
+      ip: req.ip || '',
+      action: 'document.approve',
+      resourceType: 'document',
+      resourceId: req.params.id,
+      after: { status: 'approved', comment: req.body.comment },
+      requestId: (req as any).requestId,
+    });
+
+    res.json(updated);
   } catch (error) {
     next(error);
   }

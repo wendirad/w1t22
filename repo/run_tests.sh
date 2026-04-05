@@ -46,9 +46,19 @@ echo "----------------------------------------"
 echo "Waiting for server at ${API_URL:-http://localhost:5000}..."
 
 if node API_tests/api-tests.js; then
-  API_PASSED=1
+  API_PASSED=$((API_PASSED + 1))
 else
-  API_FAILED=1
+  API_FAILED=$((API_FAILED + 1))
+fi
+
+echo ""
+echo "Running Integration Tests..."
+echo "----------------------------------------"
+
+if node API_tests/integration-tests.js; then
+  API_PASSED=$((API_PASSED + 1))
+else
+  API_FAILED=$((API_FAILED + 1))
 fi
 
 echo ""

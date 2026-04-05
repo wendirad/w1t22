@@ -1,6 +1,8 @@
 const http = require('http');
+const crypto = require('crypto');
 
 const BASE_URL = process.env.API_URL || 'http://localhost:5000';
+const HMAC_SECRET = process.env.HMAC_SECRET || 'aG1hYyBzaGFyZWQgc2VjcmV0IGtleSBmb3IgcmVxdWVzdCBzaWdu';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@motorlot.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'MotorLot@Admin2024!';
 const STAFF_EMAIL = process.env.STAFF_EMAIL || 'staff@motorlot.com';
@@ -20,19 +22,39 @@ let testDealershipId = '';
 let testVehicleId = '';
 let testOrderId = '';
 
-function request(method, path, body, token) {
+function generateHmac(method, path, body, timestamp, secret) {
+  const payload = `${method}\n${path}\n${body}\n${timestamp}`;
+  return crypto.createHmac('sha256', secret).update(payload).digest('hex');
+}
+
+function request(method, path, body, token, opts) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, BASE_URL);
+    const fullPath = url.pathname + url.search;
+    const timestamp = new Date().toISOString();
+    const bodyStr = body ? JSON.stringify(body) : '';
+
     const options = {
       hostname: url.hostname,
       port: url.port,
-      path: url.pathname + url.search,
+      path: fullPath,
       method,
       headers: {
         'Content-Type': 'application/json',
-        'X-Timestamp': new Date().toISOString(),
+        'X-Timestamp': timestamp,
       },
     };
+
+    // Generate HMAC signature unless explicitly skipped
+    if (!(opts && opts.skipHmac)) {
+      const signature = generateHmac(method, fullPath, bodyStr, timestamp, HMAC_SECRET);
+      options.headers['X-Hmac-Signature'] = signature;
+    }
+
+    // Allow overriding specific headers for testing
+    if (opts && opts.headers) {
+      Object.assign(options.headers, opts.headers);
+    }
 
     if (token) options.headers['Authorization'] = `Bearer ${token}`;
 
@@ -67,6 +89,18 @@ function assert(condition, msg) {
   if (!condition) throw new Error(msg || 'Assertion failed');
 }
 
+async function resetVehicles(token) {
+  // Reset any reserved/sold vehicles back to available for test idempotency
+  for (const status of ['reserved', 'sold']) {
+    const res = await request('GET', `/api/v1/vehicles?status=${status}&limit=100`, null, token);
+    if (res.status === 200 && res.data.data) {
+      for (const v of res.data.data) {
+        await request('PATCH', `/api/v1/vehicles/${v._id}`, { status: 'available' }, token);
+      }
+    }
+  }
+}
+
 async function runTests() {
   console.log('API Tests:');
   console.log('');
@@ -90,6 +124,9 @@ async function runTests() {
     adminToken = res.data.accessToken;
     assert(res.data.user.role === 'admin', 'Expected admin role');
   });
+
+  // Reset test data from prior runs
+  await resetVehicles(adminToken);
 
   await test('POST /auth/login with staff', async () => {
     const res = await request('POST', '/api/v1/auth/login', {
@@ -136,7 +173,7 @@ async function runTests() {
 
   await test('POST /auth/register creates new user', async () => {
     const res = await request('POST', '/api/v1/auth/register', {
-      email: `test-${Date.now()}@motorlot.com`, password: 'test123',
+      email: `test-${Date.now()}@motorlot.com`, password: 'test12345',
       firstName: 'Test', lastName: 'User',
     });
     assert(res.status === 201, `Expected 201, got ${res.status}`);
@@ -145,7 +182,7 @@ async function runTests() {
 
   await test('POST /auth/register rejects duplicate email', async () => {
     const res = await request('POST', '/api/v1/auth/register', {
-      email: ADMIN_EMAIL, password: 'test123',
+      email: ADMIN_EMAIL, password: 'test12345',
       firstName: 'Dup', lastName: 'User',
     });
     assert(res.status === 409, `Expected 409, got ${res.status}`);
@@ -169,9 +206,9 @@ async function runTests() {
     assert(res.data.vin, 'Expected VIN');
   });
 
-  await test('GET /vehicles with invalid id returns 400', async () => {
+  await test('GET /vehicles with invalid id returns error', async () => {
     const res = await request('GET', '/api/v1/vehicles/invalidid');
-    assert(res.status === 400, `Expected 400, got ${res.status}`);
+    assert(res.status === 422, `Expected 422, got ${res.status}`);
   });
 
   // ===== Search =====
@@ -201,6 +238,18 @@ async function runTests() {
 
   // ===== Cart =====
   console.log('--- Cart ---');
+
+  // Clear buyer's cart from previous runs
+  if (testDealershipId) {
+    const cartRes = await request('GET', `/api/v1/cart?dealershipId=${testDealershipId}`, null, buyerToken);
+    if (cartRes.status === 200 && cartRes.data.items) {
+      for (const item of cartRes.data.items) {
+        const vid = typeof item.vehicleId === 'object' ? item.vehicleId._id : item.vehicleId;
+        await request('DELETE', `/api/v1/cart/items/${vid}?dealershipId=${testDealershipId}`, null, buyerToken);
+      }
+    }
+  }
+
   await test('GET /cart requires auth', async () => {
     const res = await request('GET', '/api/v1/cart');
     assert(res.status === 401, `Expected 401, got ${res.status}`);

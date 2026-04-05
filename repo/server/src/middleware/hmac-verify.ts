@@ -26,13 +26,13 @@ export async function hmacVerify(
       throw new UnauthorizedError('Request timestamp outside acceptable window');
     }
 
-    const body = JSON.stringify(req.body) || '';
+    const rawBody = req.body && Object.keys(req.body).length > 0 ? JSON.stringify(req.body) : '';
 
     const valid = verifyHmac(
       signature,
       req.method,
       req.originalUrl,
-      body,
+      rawBody,
       timestamp,
       config.hmacSecret
     );

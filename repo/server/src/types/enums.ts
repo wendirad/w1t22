@@ -33,6 +33,8 @@ export enum PaymentMethod {
   CASH = 'cash',
   CASHIER_CHECK = 'cashier_check',
   IN_HOUSE_FINANCING = 'in_house_financing',
+  CREDIT_CARD = 'credit_card',
+  BANK_TRANSFER = 'bank_transfer',
 }
 
 export enum PaymentStatus {

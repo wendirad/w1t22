@@ -17,6 +17,8 @@ export default function VehicleSearchPage() {
     minMileage: searchParams.get('minMileage') || '',
     maxMileage: searchParams.get('maxMileage') || '',
     region: searchParams.get('region') || '',
+    minRegistrationDate: searchParams.get('minRegistrationDate') || '',
+    maxRegistrationDate: searchParams.get('maxRegistrationDate') || '',
     sortBy: searchParams.get('sortBy') || 'createdAt',
     sortOrder: searchParams.get('sortOrder') || 'desc',
     page: searchParams.get('page') || '1',
@@ -57,7 +59,7 @@ export default function VehicleSearchPage() {
 
   const clearFilters = () => {
     setQ('');
-    setFilters({ make: '', model: '', minPrice: '', maxPrice: '', minMileage: '', maxMileage: '', region: '', sortBy: 'createdAt', sortOrder: 'desc', page: '1' });
+    setFilters({ make: '', model: '', minPrice: '', maxPrice: '', minMileage: '', maxMileage: '', region: '', minRegistrationDate: '', maxRegistrationDate: '', sortBy: 'createdAt', sortOrder: 'desc', page: '1' });
     setSearchParams({});
   };
 
@@ -164,6 +166,16 @@ export default function VehicleSearchPage() {
             <div>
               <label className="text-sm text-gray-600">Region</label>
               <input value={filters.region} onChange={(e) => updateFilter('region', e.target.value)} className="input-field" placeholder="e.g., Southeast" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-sm text-gray-600">Reg. From</label>
+                <input type="date" value={filters.minRegistrationDate} onChange={(e) => updateFilter('minRegistrationDate', e.target.value)} className="input-field" />
+              </div>
+              <div>
+                <label className="text-sm text-gray-600">Reg. To</label>
+                <input type="date" value={filters.maxRegistrationDate} onChange={(e) => updateFilter('maxRegistrationDate', e.target.value)} className="input-field" />
+              </div>
             </div>
             <div>
               <label className="text-sm text-gray-600">Sort By</label>

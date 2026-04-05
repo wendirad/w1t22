@@ -12,7 +12,9 @@ export interface IUser extends Document {
     lastName: string;
     phone: string;
     driversLicense?: string;
+    driversLicenseEncrypted?: Record<string, any> | null;
     ssn?: string;
+    ssnEncrypted?: Record<string, any> | null;
   };
   isActive: boolean;
   deletedAt: Date | null;
@@ -39,7 +41,9 @@ const userSchema = new Schema<IUser>(
       lastName: { type: String, required: true },
       phone: { type: String, default: '' },
       driversLicense: { type: String, default: '' },
+      driversLicenseEncrypted: { type: Schema.Types.Mixed, default: null },
       ssn: { type: String, default: '' },
+      ssnEncrypted: { type: Schema.Types.Mixed, default: null },
     },
     isActive: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null },

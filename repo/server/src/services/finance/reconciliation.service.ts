@@ -2,6 +2,7 @@ import { Order } from '../../models/order.model';
 import { Invoice } from '../../models/invoice.model';
 import { Payment } from '../../models/payment.model';
 import { ReconciliationRun } from '../../models/reconciliation-run.model';
+import { DiscrepancyTicket } from '../../models/discrepancy-ticket.model';
 import { Dealership } from '../../models/dealership.model';
 import { OrderStatus, InvoiceStatus, PaymentStatus } from '../../types/enums';
 import logger from '../../lib/logger';
@@ -129,6 +130,23 @@ async function reconcileDealership(dealershipId: string) {
     discrepancies,
     status,
   });
+
+  // Auto-create discrepancy tickets for manual review
+  if (discrepancies.length > 0) {
+    const tickets = discrepancies.map((d) => ({
+      reconciliationRunId: run._id,
+      dealershipId,
+      type: d.type,
+      referenceId: d.referenceId,
+      details: d.details,
+      status: 'open',
+    }));
+    await DiscrepancyTicket.insertMany(tickets);
+    logger.info(
+      { dealershipId, ticketCount: tickets.length },
+      'Discrepancy tickets created'
+    );
+  }
 
   logger.info(
     { dealershipId, matchedCount, discrepancies: discrepancies.length },

@@ -5,6 +5,7 @@ import { hashFile } from '../../lib/crypto';
 import { validateFileType, validateFileSize } from './file-validator';
 import { NotFoundError, ForbiddenError, BadRequestError } from '../../lib/errors';
 import { PaginationParams, buildPaginatedResult } from '../../lib/pagination';
+import { encryptValue, decryptValue } from '../privacy/encryption.service';
 import config from '../../config';
 import logger from '../../lib/logger';
 
@@ -48,6 +49,14 @@ export async function uploadDocument(
 
   fs.writeFileSync(storagePath, file.buffer);
 
+  let encryptedMetadata = null;
+  if (metadata.sensitiveFlag) {
+    encryptedMetadata = {
+      originalFilename: await encryptValue(file.originalname),
+      storagePath: await encryptValue(storagePath),
+    };
+  }
+
   const doc = new DocumentModel({
     dealershipId: metadata.dealershipId,
     orderId: metadata.orderId || null,
@@ -62,6 +71,7 @@ export async function uploadDocument(
     quarantined,
     quarantineReason,
     sensitiveFlag: metadata.sensitiveFlag || false,
+    encryptedMetadata,
   });
 
   await doc.save();
@@ -133,4 +143,62 @@ export async function deleteDocument(documentId: string, userId: string) {
 
   await DocumentModel.findByIdAndDelete(documentId);
   logger.info({ documentId, userId }, 'Document deleted');
+}
+
+export async function updateDocumentMetadata(
+  documentId: string,
+  updates: { type?: string; orderId?: string; vehicleId?: string; sensitiveFlag?: boolean }
+) {
+  const doc = await DocumentModel.findById(documentId);
+  if (!doc) throw new NotFoundError('Document not found');
+
+  if (updates.type !== undefined) doc.type = updates.type as any;
+  if (updates.orderId !== undefined) doc.orderId = updates.orderId as any;
+  if (updates.vehicleId !== undefined) doc.vehicleId = updates.vehicleId as any;
+  if (updates.sensitiveFlag !== undefined) doc.sensitiveFlag = updates.sensitiveFlag;
+
+  await doc.save();
+  logger.info({ documentId }, 'Document metadata updated');
+  return doc;
+}
+
+export async function shareDocument(
+  documentId: string,
+  shareParams: { targetUserId: string; actions: string[] }
+) {
+  const doc = await DocumentModel.findById(documentId);
+  if (!doc) throw new NotFoundError('Document not found');
+
+  const existing = doc.permissions.overrides.find(
+    (o) => o.userId.toString() === shareParams.targetUserId
+  );
+
+  if (existing) {
+    existing.actions = [...new Set([...existing.actions, ...shareParams.actions])];
+  } else {
+    doc.permissions.overrides.push({
+      userId: shareParams.targetUserId as any,
+      actions: shareParams.actions,
+    });
+  }
+
+  await doc.save();
+  logger.info({ documentId, targetUserId: shareParams.targetUserId }, 'Document shared');
+  return doc;
+}
+
+export async function transitionDocumentStatus(
+  documentId: string,
+  status: string,
+  userId: string
+) {
+  const doc = await DocumentModel.findById(documentId);
+  if (!doc) throw new NotFoundError('Document not found');
+
+  if (doc.quarantined) throw new ForbiddenError('Cannot transition quarantined document');
+
+  doc.status = status;
+  await doc.save();
+  logger.info({ documentId, status, userId }, 'Document status transitioned');
+  return doc;
 }

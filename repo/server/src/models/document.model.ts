@@ -15,6 +15,8 @@ export interface IDocument extends Document {
   quarantined: boolean;
   quarantineReason: string | null;
   sensitiveFlag: boolean;
+  encryptedMetadata: Record<string, any> | null;
+  status: string;
   permissions: {
     readRoles: string[];
     writeRoles: string[];
@@ -46,6 +48,12 @@ const documentSchema = new Schema<IDocument>(
     quarantined: { type: Boolean, default: false },
     quarantineReason: { type: String, default: null },
     sensitiveFlag: { type: Boolean, default: false },
+    encryptedMetadata: { type: Schema.Types.Mixed, default: null },
+    status: {
+      type: String,
+      enum: ['draft', 'submitted', 'approved', 'rejected'],
+      default: 'draft',
+    },
     permissions: {
       readRoles: { type: [String], default: ['admin', 'dealership_staff', 'finance_reviewer'] },
       writeRoles: { type: [String], default: ['admin', 'dealership_staff'] },

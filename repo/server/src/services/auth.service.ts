@@ -4,6 +4,8 @@ import { Dealership } from '../models/dealership.model';
 import config from '../config';
 import { BadRequestError, UnauthorizedError, NotFoundError, ConflictError } from '../lib/errors';
 import logger from '../lib/logger';
+import { encryptValue, decryptValue } from './privacy/encryption.service';
+import { EncryptedData } from '../lib/crypto';
 
 interface RegisterInput {
   email: string;
@@ -36,6 +38,31 @@ function generateTokens(user: IUser): TokenPair {
   });
 
   return { accessToken, refreshToken };
+}
+
+async function encryptSensitiveFields(user: IUser) {
+  if (user.profile.driversLicense && !user.profile.driversLicenseEncrypted) {
+    user.profile.driversLicenseEncrypted = await encryptValue(user.profile.driversLicense);
+    user.profile.driversLicense = user.profile.driversLicense.slice(-4).padStart(user.profile.driversLicense.length, '*');
+  }
+  if (user.profile.ssn && !user.profile.ssnEncrypted) {
+    user.profile.ssnEncrypted = await encryptValue(user.profile.ssn);
+    user.profile.ssn = user.profile.ssn.slice(-4).padStart(user.profile.ssn.length, '*');
+  }
+}
+
+async function decryptSensitiveFields(userJson: any): Promise<any> {
+  if (userJson.profile?.driversLicenseEncrypted) {
+    try {
+      userJson.profile.driversLicense = await decryptValue(userJson.profile.driversLicenseEncrypted as EncryptedData);
+    } catch { /* masked value remains */ }
+  }
+  if (userJson.profile?.ssnEncrypted) {
+    try {
+      userJson.profile.ssn = await decryptValue(userJson.profile.ssnEncrypted as EncryptedData);
+    } catch { /* masked value remains */ }
+  }
+  return userJson;
 }
 
 export async function register(input: RegisterInput) {
@@ -125,10 +152,14 @@ export async function getProfile(userId: string) {
   if (!user) {
     throw new NotFoundError('User not found');
   }
-  return user.toJSON();
+  const json = user.toJSON();
+  return decryptSensitiveFields(json);
 }
 
-export async function updateProfile(userId: string, updates: Partial<{ firstName: string; lastName: string; phone: string }>) {
+export async function updateProfile(
+  userId: string,
+  updates: Partial<{ firstName: string; lastName: string; phone: string; driversLicense: string; ssn: string }>
+) {
   const user = await User.findById(userId);
   if (!user) {
     throw new NotFoundError('User not found');
@@ -137,7 +168,17 @@ export async function updateProfile(userId: string, updates: Partial<{ firstName
   if (updates.firstName) user.profile.firstName = updates.firstName;
   if (updates.lastName) user.profile.lastName = updates.lastName;
   if (updates.phone) user.profile.phone = updates.phone;
+  if (updates.driversLicense) {
+    user.profile.driversLicense = updates.driversLicense;
+    user.profile.driversLicenseEncrypted = null as any;
+  }
+  if (updates.ssn) {
+    user.profile.ssn = updates.ssn;
+    user.profile.ssnEncrypted = null as any;
+  }
 
+  await encryptSensitiveFields(user);
   await user.save();
-  return user.toJSON();
+  const json = user.toJSON();
+  return decryptSensitiveFields(json);
 }
