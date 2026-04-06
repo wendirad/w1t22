@@ -8,6 +8,12 @@ cleanup() {
   echo "Stopping docker compose services and removing local images..."
   docker compose down --remove-orphans --rmi local || true
 
+  echo "Restoring original .env.example..."
+  if [ -f .env.example.backup ]; then
+    mv .env.example.backup .env.example
+    echo "Original .env.example restored."
+  fi
+
   echo "Cleanup complete."
 }
 
@@ -17,10 +23,56 @@ teardown_and_exit() {
   exit $exit_code
 }
 
-# Load environment variables if .env file exists
-if [ -f .env ]; then
+# Backup original .env.example and create test version
+if [ -f .env.example ] && [ ! -f .env.example.backup ]; then
+  echo "Backing up original .env.example..."
+  mv .env.example .env.example.backup
+fi
+
+echo "Creating .env.example with test credentials..."
+cat > .env.example << 'EOF'
+NODE_ENV=development
+PORT=5000
+LOG_LEVEL=info
+
+MONGODB_URI=mongodb://mongodb:27017/motorlot?replicaSet=rs0&directConnection=true
+REDIS_URL=redis://redis:6379
+
+JWT_SECRET=test-jwt-secret-key-should-be-changed-in-production
+JWT_REFRESH_SECRET=test-refresh-secret-key-should-be-changed-in-production
+HMAC_SECRET=test-hmac-secret-key-should-be-changed-in-production
+
+MASTER_ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+UPLOAD_DIR=/app/uploads
+QUARANTINE_DIR=/app/quarantine
+
+ADMIN_EMAIL=admin@motorlot.com
+ADMIN_PASSWORD=MotorLot@Admin2024!
+ADMIN_FIRST_NAME=Admin
+ADMIN_LAST_NAME=User
+
+STAFF_EMAIL=staff@motorlot.com
+STAFF_PASSWORD=MotorLot@Staff2024!
+STAFF_FIRST_NAME=Staff
+STAFF_LAST_NAME=User
+
+FINANCE_EMAIL=finance@motorlot.com
+FINANCE_PASSWORD=MotorLot@Finance2024!
+FINANCE_FIRST_NAME=Finance
+FINANCE_LAST_NAME=Reviewer
+
+BUYER_EMAIL=buyer@motorlot.com
+BUYER_PASSWORD=MotorLot@Buyer2024!
+BUYER_FIRST_NAME=Buyer
+BUYER_LAST_NAME=User
+EOF
+echo ".env.example created with test credentials"
+
+# Load environment variables
+if [ -f .env.example ]; then
   set -a
-  source .env
+  source .env.example
   set +a
 fi
 
@@ -37,7 +89,41 @@ if ! docker compose up -d --build; then
   teardown_and_exit 1
 fi
 
-echo "Services are up. Starting tests..."
+echo "Waiting for services to be healthy..."
+sleep 5
+
+echo "Verifying MongoDB is ready..."
+for i in {1..30}; do
+  if docker compose exec -T mongodb mongosh --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
+    echo "MongoDB is ready."
+    break
+  fi
+  if [ $i -eq 30 ]; then
+    echo "MongoDB failed to become ready. Aborting."
+    teardown_and_exit 1
+  fi
+  echo "  Waiting for MongoDB... ($i/30)"
+  sleep 1
+done
+
+echo "Running database seeds..."
+if ! docker compose exec -T server npm run seed 2>&1; then
+  echo "Seed failed. Server logs:"
+  docker compose logs server | tail -50
+  teardown_and_exit 1
+fi
+
+echo "Seeds complete. Verifying test accounts created..."
+ACCOUNT_COUNT=$(docker compose exec -T mongodb mongosh motorlot --eval "db.users.countDocuments()" 2>&1 | grep -oE '[0-9]+' | tail -1)
+if [ "$ACCOUNT_COUNT" -lt 4 ]; then
+  echo "Warning: Only $ACCOUNT_COUNT accounts created (expected 4). Checking MongoDB state..."
+  docker compose exec -T mongodb mongosh motorlot --eval "db.users.find({}, {email: 1}).pretty()" | head -20
+fi
+
+echo "Waiting for server to be ready..."
+sleep 2
+
+echo "Services are up and seeded. Starting tests..."
 echo ""
 
 UNIT_PASSED=0
