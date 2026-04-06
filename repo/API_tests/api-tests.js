@@ -477,7 +477,7 @@ async function runTests() {
 
   await test('POST /orders/:id/transition advances state', async () => {
     const res = await request('POST', `/api/v1/orders/${testOrderId}/transition`, {
-      event: 'RESERVE', reason: 'API test',
+      event: 'RESERVE', reason: 'API test', idempotencyKey: `tx-reserve-${Date.now()}`,
     }, staffToken);
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     assert(res.data.status === 'reserved', `Expected reserved, got ${res.data.status}`);
@@ -485,7 +485,7 @@ async function runTests() {
 
   await test('POST /orders/:id/transition rejects invalid event', async () => {
     const res = await request('POST', `/api/v1/orders/${testOrderId}/transition`, {
-      event: 'FULFILL', reason: 'Skip',
+      event: 'FULFILL', reason: 'Skip', idempotencyKey: `tx-fulfill-${Date.now()}`,
     }, staffToken);
     assert(res.status === 400, `Expected 400, got ${res.status}`);
   });
@@ -493,21 +493,21 @@ async function runTests() {
   // Buyer transition restrictions
   await test('buyer cannot INVOICE own order', async () => {
     const res = await request('POST', `/api/v1/orders/${testOrderId}/transition`, {
-      event: 'INVOICE',
+      event: 'INVOICE', idempotencyKey: `buyer-inv-${Date.now()}`,
     }, buyerToken);
     assert(res.status === 403, `Expected 403, got ${res.status}`);
   });
 
   await test('buyer cannot SETTLE order', async () => {
     const res = await request('POST', `/api/v1/orders/${testOrderId}/transition`, {
-      event: 'SETTLE',
+      event: 'SETTLE', idempotencyKey: `buyer-set-${Date.now()}`,
     }, buyerToken);
     assert(res.status === 403, `Expected 403, got ${res.status}`);
   });
 
   await test('buyer cannot FULFILL order', async () => {
     const res = await request('POST', `/api/v1/orders/${testOrderId}/transition`, {
-      event: 'FULFILL',
+      event: 'FULFILL', idempotencyKey: `buyer-ful-${Date.now()}`,
     }, buyerToken);
     assert(res.status === 403, `Expected 403, got ${res.status}`);
   });
@@ -516,7 +516,7 @@ async function runTests() {
   console.log('--- Finance ---');
   await test('transition to invoiced', async () => {
     const res = await request('POST', `/api/v1/orders/${testOrderId}/transition`, {
-      event: 'INVOICE', reason: 'Ready for invoice',
+      event: 'INVOICE', reason: 'Ready for invoice', idempotencyKey: `tx-invoice-${Date.now()}`,
     }, staffToken);
     assert(res.status === 200, `Expected 200, got ${res.status}`);
   });

@@ -36,15 +36,19 @@ export async function uploadDocument(
   const date = new Date();
   const subDir = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 
+  // Sanitize the original filename to prevent path traversal attacks.
+  // Strip directory components and replace unsafe characters.
+  const safeFilename = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
+
   let storagePath: string;
   if (quarantined) {
     const quarantineDir = path.join(config.quarantineDir, metadata.dealershipId);
     fs.mkdirSync(quarantineDir, { recursive: true });
-    storagePath = path.join(quarantineDir, `${sha256Hash}-${file.originalname}`);
+    storagePath = path.join(quarantineDir, `${sha256Hash}-${safeFilename}`);
   } else {
     const uploadDir = path.join(config.uploadDir, metadata.dealershipId, subDir);
     fs.mkdirSync(uploadDir, { recursive: true });
-    storagePath = path.join(uploadDir, `${sha256Hash}-${file.originalname}`);
+    storagePath = path.join(uploadDir, `${sha256Hash}-${safeFilename}`);
   }
 
   fs.writeFileSync(storagePath, file.buffer);
@@ -87,7 +91,7 @@ export async function uploadDocument(
   await doc.save();
 
   logger.info(
-    { documentId: doc._id, quarantined, filename: file.originalname },
+    { documentId: doc._id, quarantined, hashPrefix: sha256Hash.slice(0, 8), sensitiveFlag: metadata.sensitiveFlag || false },
     'Document uploaded'
   );
 
@@ -141,7 +145,14 @@ export async function downloadDocument(documentId: string) {
 }
 
 export async function listDocuments(
-  filters: { dealershipId?: string; orderId?: string; uploadedBy?: string; type?: string; sensitiveFlag?: boolean },
+  filters: {
+    dealershipId?: string;
+    orderId?: string;
+    uploadedBy?: string;
+    type?: string;
+    sensitiveFlag?: boolean;
+    sensitiveAccessFilter?: { permittedSensitiveIds: string[] };
+  },
   pagination: PaginationParams
 ) {
   const query: any = { quarantined: false };
@@ -150,6 +161,22 @@ export async function listDocuments(
   if (filters.uploadedBy) query.uploadedBy = filters.uploadedBy;
   if (filters.type) query.type = filters.type;
   if (filters.sensitiveFlag !== undefined) query.sensitiveFlag = filters.sensitiveFlag;
+
+  // When a sensitiveAccessFilter is provided, the query must return
+  // non-sensitive docs PLUS only the specific sensitive docs the user is
+  // permitted to see. This is applied at the DB level so that skip/limit/count
+  // all operate on the correctly filtered set — no post-query filtering needed.
+  if (filters.sensitiveAccessFilter) {
+    const { permittedSensitiveIds } = filters.sensitiveAccessFilter;
+    if (permittedSensitiveIds.length > 0) {
+      query.$or = [
+        { sensitiveFlag: { $ne: true } },
+        { _id: { $in: permittedSensitiveIds } },
+      ];
+    } else {
+      query.sensitiveFlag = { $ne: true };
+    }
+  }
 
   const sort: any = { [pagination.sortBy]: pagination.sortOrder === 'asc' ? 1 : -1, _id: 1 };
   const skip = (pagination.page - 1) * pagination.limit;

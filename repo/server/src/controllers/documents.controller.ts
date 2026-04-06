@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import * as documentService from '../services/document/document.service';
-import { checkPermission } from '../services/permission.service';
+import { checkPermission, getPermittedSensitiveDocIds } from '../services/permission.service';
 import { ForbiddenError, BadRequestError } from '../lib/errors';
 import { parsePaginationParams } from '../lib/pagination';
 import { logAuditEvent } from '../services/audit.service';
@@ -123,37 +123,18 @@ export async function listDocuments(req: Request, res: Response, next: NextFunct
       uploadedBy: req.query.uploadedBy as string,
       type: req.query.type as string,
     };
-    // Admins and finance reviewers see everything including sensitive docs.
-    // All other roles: fetch all documents, then filter out sensitive ones
-    // the user has no explicit override for. This ensures that shared sensitive
-    // documents appear in listings — not just on direct access.
-    const result = await documentService.listDocuments(filters, pagination);
 
     if (role !== 'admin' && role !== 'finance_reviewer' && dealershipId) {
-      const filtered = [];
-      for (const doc of result.data) {
-        if (!doc.sensitiveFlag) {
-          filtered.push(doc);
-        } else {
-          // Check if this specific user has an override granting read access
-          const allowed = await checkPermission(
-            req.user!.id,
-            role,
-            dealershipId,
-            'document',
-            doc._id.toString(),
-            'read',
-            true, // sensitiveFlag
-          );
-          if (allowed) {
-            filtered.push(doc);
-          }
-        }
-      }
-      result.data = filtered;
-      result.pagination.total = filtered.length;
+      // Non-privileged users: find which sensitive doc IDs they have explicit
+      // overrides for, then pass a combined filter to the DB query so that
+      // pagination counts and offsets are computed against the real result set.
+      const permittedIds = await getPermittedSensitiveDocIds(
+        req.user!.id, role, dealershipId,
+      );
+      filters.sensitiveAccessFilter = { permittedSensitiveIds: permittedIds };
     }
 
+    const result = await documentService.listDocuments(filters, pagination);
     res.json(result);
   } catch (error) {
     next(error);

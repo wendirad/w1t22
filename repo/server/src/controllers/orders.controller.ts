@@ -108,9 +108,9 @@ export async function transitionOrder(req: Request, res: Response, next: NextFun
   try {
     const beforeOrder = await orderService.getOrder(req.params.id);
     assertOrderAccess(beforeOrder, req);
-    const { event, reason } = req.body;
+    const { event, reason, idempotencyKey } = req.body;
     assertTransitionRole(event, req.user!.role);
-    const order = await orderService.transitionOrder(req.params.id, event, req.user!.id, reason);
+    const order = await orderService.transitionOrder(req.params.id, event, req.user!.id, reason, idempotencyKey);
     await logAuditEvent({
       dealershipId: beforeOrder.dealershipId?.toString(),
       userId: req.user!.id,

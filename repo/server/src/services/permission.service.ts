@@ -109,6 +109,45 @@ export async function checkPermission(
   return roleDefaults.includes(action);
 }
 
+/**
+ * Returns the IDs of sensitive documents in the given dealership that the user
+ * has explicit read access to (via PermissionOverride or document-level share).
+ * Used by the document listing to build a correct DB query that includes
+ * permitted sensitive docs without post-query filtering.
+ */
+export async function getPermittedSensitiveDocIds(
+  userId: string,
+  role: string,
+  dealershipId: string,
+): Promise<string[]> {
+  // Find admin-managed overrides that grant read on any sensitive document
+  const overrides = await PermissionOverride.find({
+    dealershipId,
+    resource: 'document',
+    userId,
+    actions: 'read',
+    effect: PermissionEffect.ALLOW,
+    $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+  }).select('resourceId');
+
+  const overrideDocIds = overrides
+    .filter((o) => o.resourceId)
+    .map((o) => o.resourceId!.toString());
+
+  // Find documents shared directly with this user via document-level overrides
+  const sharedDocs = await DocumentModel.find({
+    dealershipId,
+    sensitiveFlag: true,
+    'permissions.overrides': {
+      $elemMatch: { userId, actions: 'read' },
+    },
+  }).select('_id');
+
+  const sharedDocIds = sharedDocs.map((d) => d._id.toString());
+
+  return [...new Set([...overrideDocIds, ...sharedDocIds])];
+}
+
 async function checkDocumentLevelOverride(
   documentId: string,
   userId: string,

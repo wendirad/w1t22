@@ -104,7 +104,11 @@ test('transitionOrder: missing event is rejected', () => {
 });
 
 test('transitionOrder: valid CANCEL passes', () => {
-  expectPass(transitionOrderSchema, { event: 'CANCEL', reason: 'test' });
+  expectPass(transitionOrderSchema, { event: 'CANCEL', reason: 'test', idempotencyKey: 'tx-1' });
+});
+
+test('transitionOrder: missing idempotencyKey is rejected', () => {
+  expectFail(transitionOrderSchema, { event: 'CANCEL', reason: 'test' });
 });
 
 // Finance - payment

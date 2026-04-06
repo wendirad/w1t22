@@ -65,6 +65,7 @@ export const createOrderSchema = z.object({
 export const transitionOrderSchema = z.object({
   event: z.enum(['RESERVE', 'INVOICE', 'SETTLE', 'FULFILL', 'CANCEL']),
   reason: z.string().optional(),
+  idempotencyKey: z.string().min(1, 'idempotencyKey is required for order transitions'),
 });
 
 export const mergeOrdersSchema = z.object({

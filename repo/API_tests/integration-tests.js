@@ -296,7 +296,7 @@ async function runTests() {
 
     await test('buyer 2 cannot transition buyer 1 order (403)', async () => {
       const res = await request('POST', `/api/v1/orders/${buyer1OrderId}/transition`, {
-        event: 'CANCEL', reason: 'Unauthorized attempt',
+        event: 'CANCEL', reason: 'Unauthorized attempt', idempotencyKey: `tx-unauth-${Date.now()}`,
       }, buyer2Token);
       assert(res.status === 403, `Expected 403, got ${res.status}`);
     });
@@ -433,7 +433,7 @@ async function runTests() {
         rollbackOrderId = Array.isArray(orderRes.data) ? orderRes.data[0]._id : orderRes.data._id;
         // Advance to reserved
         await request('POST', `/api/v1/orders/${rollbackOrderId}/transition`, {
-          event: 'RESERVE', reason: 'For rollback test',
+          event: 'RESERVE', reason: 'For rollback test', idempotencyKey: `tx-rbres-${Date.now()}`,
         }, staffToken);
       }
     }
@@ -442,7 +442,7 @@ async function runTests() {
   if (rollbackOrderId) {
     await test('order cancellation creates transition event', async () => {
       const cancelRes = await request('POST', `/api/v1/orders/${rollbackOrderId}/transition`, {
-        event: 'CANCEL', reason: 'Testing rollback traceability',
+        event: 'CANCEL', reason: 'Testing rollback traceability', idempotencyKey: `tx-rbcan-${Date.now()}`,
       }, staffToken);
       assert(cancelRes.status === 200, `Expected 200 for cancel, got ${cancelRes.status}`);
       assert(cancelRes.data.status === 'cancelled', `Expected cancelled, got ${cancelRes.data.status}`);
