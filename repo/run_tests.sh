@@ -1,5 +1,22 @@
 #!/bin/bash
 
+cleanup() {
+  echo ""
+  echo "Cleaning up..."
+  echo "----------------------------------------"
+
+  echo "Stopping docker compose services and removing local images..."
+  docker compose down --remove-orphans --rmi local || true
+
+  echo "Cleanup complete."
+}
+
+teardown_and_exit() {
+  local exit_code=$1
+  cleanup
+  exit $exit_code
+}
+
 # Load environment variables if .env file exists
 if [ -f .env ]; then
   set -a
@@ -12,14 +29,22 @@ echo "  MotorLot DealerOps - Test Runner"
 echo "========================================"
 echo ""
 
+echo "Preparing services..."
+echo "----------------------------------------"
+echo "Building and starting services with docker compose..."
+if ! docker compose up -d --build; then
+  echo "Docker compose build/start failed. Aborting test run."
+  teardown_and_exit 1
+fi
+
+echo "Services are up. Starting tests..."
+echo ""
+
 UNIT_PASSED=0
 UNIT_FAILED=0
 API_PASSED=0
 API_FAILED=0
 API_SKIPPED=0
-
-# Make ts-node available for unit tests that import TypeScript source
-export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$(pwd)/server/node_modules"
 
 # --- Unit Tests ---
 echo "Running Unit Tests..."
@@ -28,7 +53,11 @@ echo "----------------------------------------"
 for test_file in unit_tests/*.test.js; do
   echo ""
   echo "Running $test_file..."
-  if node "$test_file"; then
+  if docker compose run --rm --no-deps -T \
+      -v "$(pwd):/workspace" \
+      -w /workspace \
+      -e NODE_PATH=/app/node_modules \
+      server node "$test_file"; then
     UNIT_PASSED=$((UNIT_PASSED + 1))
   else
     UNIT_FAILED=$((UNIT_FAILED + 1))
@@ -100,7 +129,7 @@ if [ $TOTAL_FAILED -gt 0 ]; then
   echo "  Result: SOME TESTS FAILED"
 elif [ $TOTAL_SKIPPED -gt 0 ]; then
   echo "  Result: INCOMPLETE — $TOTAL_SKIPPED API suite(s) skipped (server not running)"
-  echo "  Run 'docker compose up' first, then re-run to get full results."
+  echo "  Check Docker health/startup logs, then re-run to get full results."
 else
   echo "  Result: ALL TESTS PASSED"
 fi
@@ -108,9 +137,9 @@ echo "========================================"
 
 # Fail if any tests failed OR if any were skipped (skip is not a pass)
 if [ $TOTAL_FAILED -gt 0 ]; then
-  exit 1
+  teardown_and_exit 1
 fi
 if [ $TOTAL_SKIPPED -gt 0 ]; then
-  exit 2
+  teardown_and_exit 2
 fi
-exit 0
+teardown_and_exit 0
