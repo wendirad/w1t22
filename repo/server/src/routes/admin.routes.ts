@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as adminController from '../controllers/admin.controller';
 import { authenticate } from '../middleware/auth';
+import { hmacVerify } from '../middleware/hmac-verify';
 import { requireRole } from '../middleware/rbac';
 import { validate } from '../middleware/validate';
 import { Role } from '../types/enums';
@@ -21,16 +22,16 @@ import {
 
 const router = Router();
 
-router.use(authenticate);
+router.use(authenticate, hmacVerify);
 
 // Synonyms
-router.get('/synonyms', adminController.listSynonyms);
+router.get('/synonyms', requireRole(Role.ADMIN), adminController.listSynonyms);
 router.post('/synonyms', requireRole(Role.ADMIN), validate(createSynonymSchema), adminController.createSynonym);
 router.put('/synonyms/:id', requireRole(Role.ADMIN), validate(mongoIdParam, 'params'), validate(updateSynonymSchema), adminController.updateSynonym);
 router.delete('/synonyms/:id', requireRole(Role.ADMIN), validate(mongoIdParam, 'params'), adminController.deleteSynonym);
 
 // Tax Rates
-router.get('/tax-rates', adminController.listTaxRates);
+router.get('/tax-rates', requireRole(Role.ADMIN), adminController.listTaxRates);
 router.post('/tax-rates', requireRole(Role.ADMIN), validate(createTaxRateSchema), adminController.createTaxRate);
 router.put('/tax-rates/:id', requireRole(Role.ADMIN), validate(mongoIdParam, 'params'), validate(updateTaxRateSchema), adminController.updateTaxRate);
 router.delete('/tax-rates/:id', requireRole(Role.ADMIN), validate(mongoIdParam, 'params'), adminController.deleteTaxRate);
@@ -40,7 +41,7 @@ router.get('/users', requireRole(Role.ADMIN), adminController.listUsers);
 router.patch('/users/:id/role', requireRole(Role.ADMIN), validate(mongoIdParam, 'params'), validate(updateUserRoleSchema), adminController.updateUserRole);
 
 // Dealerships
-router.get('/dealerships', adminController.listDealerships);
+router.get('/dealerships', requireRole(Role.ADMIN), adminController.listDealerships);
 router.post('/dealerships', requireRole(Role.ADMIN), validate(createDealershipSchema), adminController.createDealership);
 
 // Experiments

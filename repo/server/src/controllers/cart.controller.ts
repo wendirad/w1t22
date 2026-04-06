@@ -4,10 +4,15 @@ import * as cartService from '../services/cart.service';
 import { logAuditEvent } from '../services/audit.service';
 
 function resolveDealershipId(req: Request): string {
-  const id = req.query.dealershipId as string || req.body?.dealershipId || req.scope?.dealershipId || req.user!.dealershipId;
-  if (!id) {
-    throw new BadRequestError('dealershipId is required. Admin users must provide dealershipId via query parameter or X-Dealership-Id header.');
+  // Non-admin users: always use their assigned dealership (never trust client input)
+  if (req.user!.role !== 'admin') {
+    const id = req.user!.dealershipId || req.scope?.dealershipId;
+    if (!id) throw new BadRequestError('User is not associated with a dealership');
+    return id;
   }
+  // Admin: use scope set by X-Dealership-Id header (validated by dealershipScope middleware)
+  const id = req.scope?.dealershipId;
+  if (!id) throw new BadRequestError('Admin must specify dealership via X-Dealership-Id header');
   return id;
 }
 

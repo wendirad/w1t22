@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { User, IUser } from '../models/user.model';
 import { Dealership } from '../models/dealership.model';
 import config from '../config';
@@ -6,6 +7,7 @@ import { BadRequestError, UnauthorizedError, NotFoundError, ConflictError } from
 import logger from '../lib/logger';
 import { encryptValue, decryptValue } from './privacy/encryption.service';
 import { EncryptedData } from '../lib/crypto';
+import { getRedisClient } from '../config/redis';
 
 interface RegisterInput {
   email: string;
@@ -19,6 +21,19 @@ interface RegisterInput {
 interface TokenPair {
   accessToken: string;
   refreshToken: string;
+}
+
+async function issueSessionSigningKey(userId: string): Promise<string> {
+  const signingKey = crypto.randomBytes(32).toString('hex');
+  const redis = getRedisClient();
+  // TTL matches access token expiry (1 hour)
+  await redis.setex(`hmac:signing:${userId}`, 3600, signingKey);
+  return signingKey;
+}
+
+export async function getSessionSigningKey(userId: string): Promise<string | null> {
+  const redis = getRedisClient();
+  return redis.get(`hmac:signing:${userId}`);
 }
 
 function generateTokens(user: IUser): TokenPair {
@@ -66,25 +81,20 @@ async function decryptSensitiveFields(userJson: any): Promise<any> {
 }
 
 export async function register(input: RegisterInput) {
+  // Public registration always creates buyer — role escalation only via admin endpoint
+  const targetDealershipId = input.dealershipId || null;
   const existing = await User.findOne({
     email: input.email,
-    dealershipId: input.dealershipId || null,
+    dealershipId: targetDealershipId,
   });
   if (existing) {
     throw new ConflictError('Email already registered');
   }
 
-  if (input.dealershipId) {
-    const dealership = await Dealership.findById(input.dealershipId);
-    if (!dealership) {
-      throw new NotFoundError('Dealership not found');
-    }
-  }
-
   const user = new User({
     email: input.email,
     passwordHash: input.password,
-    role: input.role || 'buyer',
+    role: 'buyer',
     dealershipId: input.dealershipId || null,
     profile: {
       firstName: input.firstName,
@@ -98,9 +108,11 @@ export async function register(input: RegisterInput) {
   user.refreshToken = tokens.refreshToken;
   await user.save();
 
-  logger.info({ userId: user._id, email: user.email }, 'User registered');
+  const signingKey = await issueSessionSigningKey(user._id.toString());
 
-  return { user: user.toJSON(), ...tokens };
+  logger.info({ userId: user._id }, 'User registered');
+
+  return { user: user.toJSON(), ...tokens, signingKey };
 }
 
 export async function login(email: string, password: string) {
@@ -118,9 +130,11 @@ export async function login(email: string, password: string) {
   user.refreshToken = tokens.refreshToken;
   await user.save();
 
-  logger.info({ userId: user._id, email: user.email }, 'User logged in');
+  const signingKey = await issueSessionSigningKey(user._id.toString());
 
-  return { user: user.toJSON(), ...tokens };
+  logger.info({ userId: user._id }, 'User logged in');
+
+  return { user: user.toJSON(), ...tokens, signingKey };
 }
 
 export async function refreshTokens(refreshToken: string) {
@@ -136,7 +150,9 @@ export async function refreshTokens(refreshToken: string) {
     user.refreshToken = tokens.refreshToken;
     await user.save();
 
-    return tokens;
+    const signingKey = await issueSessionSigningKey(user._id.toString());
+
+    return { ...tokens, signingKey };
   } catch {
     throw new UnauthorizedError('Invalid refresh token');
   }
@@ -144,6 +160,8 @@ export async function refreshTokens(refreshToken: string) {
 
 export async function logout(userId: string) {
   await User.findByIdAndUpdate(userId, { refreshToken: null });
+  const redis = getRedisClient();
+  await redis.del(`hmac:signing:${userId}`);
   logger.info({ userId }, 'User logged out');
 }
 

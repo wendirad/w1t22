@@ -7,7 +7,7 @@ import { NotFoundError } from '../../lib/errors';
 import logger from '../../lib/logger';
 
 const USER_PURGE_DAYS = 30;
-const FINANCIAL_RETENTION_DAYS = 2555; // ~7 years for regulatory compliance
+const FINANCIAL_RETENTION_DAYS = 30; // 30-day retention hold per business requirements
 
 export async function requestAccountDeletion(userId: string) {
   const user = await User.findById(userId);

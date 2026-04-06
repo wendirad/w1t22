@@ -15,7 +15,7 @@ const config = {
   jwtRefreshSecret: requireEnv('JWT_REFRESH_SECRET'),
   jwtExpiresIn: '1h',
   jwtRefreshExpiresIn: '7d',
-  hmacSecret: requireEnv('HMAC_SECRET'),
+  hmacSecret: process.env.HMAC_SECRET || '',
   hmacWindowSeconds: 300,
   masterEncryptionKey: requireEnv('MASTER_ENCRYPTION_KEY'),
   uploadDir: process.env.UPLOAD_DIR || './uploads',
@@ -24,6 +24,7 @@ const config = {
   allowedMimeTypes: ['application/pdf', 'image/jpeg', 'image/png'],
   cacheTtlSeconds: 600,
   trendingUpdateIntervalMinutes: 60,
+  enableOnlinePayments: process.env.ENABLE_ONLINE_PAYMENTS === 'true',
   logLevel: process.env.LOG_LEVEL || 'info',
   seed: {
     adminEmail: process.env.ADMIN_EMAIL || '',

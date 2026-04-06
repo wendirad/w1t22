@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as ordersController from '../controllers/orders.controller';
 import { authenticate } from '../middleware/auth';
+import { hmacVerify } from '../middleware/hmac-verify';
 import { dealershipScope } from '../middleware/dealership-scope';
 import { validate } from '../middleware/validate';
 import {
@@ -12,7 +13,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate, dealershipScope);
+router.use(authenticate, hmacVerify, dealershipScope);
 
 router.post('/', validate(createOrderSchema), ordersController.createOrder);
 router.get('/', ordersController.listOrders);

@@ -51,6 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .catch(() => {
           localStorage.removeItem('accessToken');
           localStorage.removeItem('refreshToken');
+          localStorage.removeItem('signingKey');
           setState({ user: null, isAuthenticated: false, isLoading: false });
         });
     } else {
@@ -62,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data } = await httpClient.post('/auth/login', { email, password });
     localStorage.setItem('accessToken', data.accessToken);
     localStorage.setItem('refreshToken', data.refreshToken);
+    if (data.signingKey) localStorage.setItem('signingKey', data.signingKey);
     setState({ user: data.user, isAuthenticated: true, isLoading: false });
   };
 
@@ -69,6 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data } = await httpClient.post('/auth/register', formData);
     localStorage.setItem('accessToken', data.accessToken);
     localStorage.setItem('refreshToken', data.refreshToken);
+    if (data.signingKey) localStorage.setItem('signingKey', data.signingKey);
     setState({ user: data.user, isAuthenticated: true, isLoading: false });
   };
 
@@ -76,6 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     httpClient.post('/auth/logout').catch(() => {});
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
+    localStorage.removeItem('signingKey');
     setState({ user: null, isAuthenticated: false, isLoading: false });
   };
 

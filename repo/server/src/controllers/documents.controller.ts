@@ -1,9 +1,22 @@
 import { Request, Response, NextFunction } from 'express';
 import * as documentService from '../services/document/document.service';
 import { checkPermission } from '../services/permission.service';
-import { ForbiddenError } from '../lib/errors';
+import { ForbiddenError, BadRequestError } from '../lib/errors';
 import { parsePaginationParams } from '../lib/pagination';
 import { logAuditEvent } from '../services/audit.service';
+import { User } from '../models/user.model';
+
+/**
+ * Verify the requesting user's dealership matches the resource's dealership.
+ * Admins bypass this check.
+ */
+function assertTenantOwnership(req: Request, resourceDealershipId: string): void {
+  if (req.user!.role === 'admin') return;
+  const userDealership = req.user!.dealershipId || req.scope?.dealershipId;
+  if (!userDealership || userDealership !== resourceDealershipId) {
+    throw new ForbiddenError('You do not have access to this resource');
+  }
+}
 
 export async function uploadDocument(req: Request, res: Response, next: NextFunction) {
   try {
@@ -12,7 +25,13 @@ export async function uploadDocument(req: Request, res: Response, next: NextFunc
       return;
     }
 
-    const dealershipId = req.body.dealershipId || req.scope?.dealershipId || req.user!.dealershipId!;
+    const dealershipId = req.user!.role === 'admin'
+      ? req.scope?.dealershipId
+      : (req.user!.dealershipId || req.scope?.dealershipId);
+    if (!dealershipId) {
+      res.status(400).json({ code: 400, msg: 'Dealership context required' });
+      return;
+    }
     const doc = await documentService.uploadDocument(req.file, {
       dealershipId,
       uploadedBy: req.user!.id,
@@ -44,6 +63,7 @@ export async function getDocument(req: Request, res: Response, next: NextFunctio
   try {
     const doc = await documentService.getDocument(req.params.id);
     const dealershipId = doc.dealershipId.toString();
+    assertTenantOwnership(req, dealershipId);
 
     const hasPermission = await checkPermission(
       req.user!.id,
@@ -67,6 +87,7 @@ export async function downloadDocument(req: Request, res: Response, next: NextFu
   try {
     const doc = await documentService.getDocument(req.params.id);
     const dealershipId = doc.dealershipId.toString();
+    assertTenantOwnership(req, dealershipId);
 
     const hasPermission = await checkPermission(
       req.user!.id,
@@ -92,12 +113,20 @@ export async function downloadDocument(req: Request, res: Response, next: NextFu
 export async function listDocuments(req: Request, res: Response, next: NextFunction) {
   try {
     const pagination = parsePaginationParams(req.query);
-    const filters = {
-      dealershipId: req.query.dealershipId as string || req.scope?.dealershipId,
+    const role = req.user!.role;
+    const filters: any = {
+      dealershipId: role === 'admin'
+        ? (req.scope?.dealershipId || req.query.dealershipId as string)
+        : (req.user!.dealershipId || req.scope?.dealershipId),
       orderId: req.query.orderId as string,
       uploadedBy: req.query.uploadedBy as string,
       type: req.query.type as string,
     };
+    // Non-privileged users must not see sensitive documents in listings
+    // unless they have explicit overrides (which are checked on individual access)
+    if (role !== 'admin' && role !== 'finance_reviewer') {
+      filters.sensitiveFlag = false;
+    }
     const result = await documentService.listDocuments(filters, pagination);
     res.json(result);
   } catch (error) {
@@ -109,6 +138,7 @@ export async function deleteDocument(req: Request, res: Response, next: NextFunc
   try {
     const doc = await documentService.getDocument(req.params.id);
     const dealershipId = doc.dealershipId.toString();
+    assertTenantOwnership(req, dealershipId);
 
     const hasPermission = await checkPermission(
       req.user!.id,
@@ -144,6 +174,7 @@ export async function editDocument(req: Request, res: Response, next: NextFuncti
   try {
     const doc = await documentService.getDocument(req.params.id);
     const dealershipId = doc.dealershipId.toString();
+    assertTenantOwnership(req, dealershipId);
 
     const hasPermission = await checkPermission(
       req.user!.id,
@@ -187,6 +218,7 @@ export async function shareDocument(req: Request, res: Response, next: NextFunct
   try {
     const doc = await documentService.getDocument(req.params.id);
     const dealershipId = doc.dealershipId.toString();
+    assertTenantOwnership(req, dealershipId);
 
     const hasPermission = await checkPermission(
       req.user!.id,
@@ -199,6 +231,14 @@ export async function shareDocument(req: Request, res: Response, next: NextFunct
     );
 
     if (!hasPermission) throw new ForbiddenError('No permission to share this document');
+
+    // Validate target user belongs to the same dealership
+    const targetUser = await User.findById(req.body.targetUserId);
+    if (!targetUser) throw new BadRequestError('Target user not found');
+    if (targetUser.dealershipId && targetUser.dealershipId.toString() !== dealershipId
+        && targetUser.role !== 'admin') {
+      throw new ForbiddenError('Cannot share document with user from a different dealership');
+    }
 
     const updated = await documentService.shareDocument(req.params.id, {
       targetUserId: req.body.targetUserId,
@@ -227,6 +267,7 @@ export async function submitDocument(req: Request, res: Response, next: NextFunc
   try {
     const doc = await documentService.getDocument(req.params.id);
     const dealershipId = doc.dealershipId.toString();
+    assertTenantOwnership(req, dealershipId);
 
     const hasPermission = await checkPermission(
       req.user!.id,
@@ -264,6 +305,7 @@ export async function approveDocument(req: Request, res: Response, next: NextFun
   try {
     const doc = await documentService.getDocument(req.params.id);
     const dealershipId = doc.dealershipId.toString();
+    assertTenantOwnership(req, dealershipId);
 
     const hasPermission = await checkPermission(
       req.user!.id,

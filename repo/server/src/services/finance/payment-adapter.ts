@@ -1,3 +1,5 @@
+import config from '../../config';
+import { BadRequestError } from '../../lib/errors';
 import logger from '../../lib/logger';
 
 export interface PaymentAdapterResult {
@@ -102,10 +104,15 @@ const adapters: PaymentAdapter[] = [
   new OnlinePaymentAdapter(),
 ];
 
+const ONLINE_METHODS = ['credit_card', 'bank_transfer'];
+
 export function resolveAdapter(method: string): PaymentAdapter {
+  if (ONLINE_METHODS.includes(method) && !config.enableOnlinePayments) {
+    throw new BadRequestError(`Online payment method "${method}" is not enabled. Only offline methods are accepted.`);
+  }
   const adapter = adapters.find((a) => a.supports(method));
   if (!adapter) {
-    throw new Error(`No payment adapter found for method: ${method}`);
+    throw new BadRequestError(`No payment adapter found for method: ${method}`);
   }
   return adapter;
 }

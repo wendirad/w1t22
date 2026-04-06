@@ -1,5 +1,8 @@
 import { PermissionOverride } from '../models/permission-override.model';
+import { DocumentModel } from '../models/document.model';
+import { User } from '../models/user.model';
 import { Role, PermissionEffect } from '../types/enums';
+import { BadRequestError } from '../lib/errors';
 
 const DEFAULT_PERMISSIONS: Record<string, Record<string, string[]>> = {
   document: {
@@ -37,9 +40,18 @@ export async function checkPermission(
       effect: PermissionEffect.ALLOW,
       $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
     });
-    return !!override;
+    if (override) return true;
+
+    // Also check document-level overrides for document resources
+    if (resource === 'document' && resourceId) {
+      const hasDocOverride = await checkDocumentLevelOverride(resourceId, userId, action);
+      if (hasDocOverride) return true;
+    }
+
+    return false;
   }
 
+  // Check PermissionOverride model (admin-managed overrides)
   if (resourceId) {
     const userOverride = await PermissionOverride.findOne({
       dealershipId,
@@ -61,6 +73,12 @@ export async function checkPermission(
       $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
     });
     if (roleOverride) return roleOverride.effect === PermissionEffect.ALLOW;
+  }
+
+  // Check document-level overrides (from share workflow)
+  if (resource === 'document' && resourceId) {
+    const hasDocOverride = await checkDocumentLevelOverride(resourceId, userId, action);
+    if (hasDocOverride) return true;
   }
 
   const userDealershipOverride = await PermissionOverride.findOne({
@@ -89,4 +107,18 @@ export async function checkPermission(
   const roleDefaults = resourceDefaults[role];
   if (!roleDefaults) return false;
   return roleDefaults.includes(action);
+}
+
+async function checkDocumentLevelOverride(
+  documentId: string,
+  userId: string,
+  action: string
+): Promise<boolean> {
+  const doc = await DocumentModel.findById(documentId).select('permissions');
+  if (!doc) return false;
+
+  const override = doc.permissions.overrides.find(
+    (o) => o.userId.toString() === userId && o.actions.includes(action)
+  );
+  return !!override;
 }

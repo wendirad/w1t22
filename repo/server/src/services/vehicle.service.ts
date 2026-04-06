@@ -45,6 +45,18 @@ export async function updateVehicle(id: string, updates: Partial<IVehicle>) {
   return vehicle;
 }
 
+export async function updateVehicleScoped(id: string, dealershipId: string | undefined, updates: Partial<IVehicle>) {
+  const vehicle = await Vehicle.findOneAndUpdate(
+    { _id: id, dealershipId },
+    updates,
+    { new: true }
+  );
+  if (!vehicle) {
+    throw new NotFoundError('Vehicle not found or does not belong to your dealership');
+  }
+  return vehicle;
+}
+
 export async function listVehicles(
   filters: Record<string, any>,
   pagination: PaginationParams

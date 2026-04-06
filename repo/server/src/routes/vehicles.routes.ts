@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as vehiclesController from '../controllers/vehicles.controller';
 import { authenticate, optionalAuth } from '../middleware/auth';
+import { hmacVerify } from '../middleware/hmac-verify';
 import { requireRole } from '../middleware/rbac';
 import { dealershipScope } from '../middleware/dealership-scope';
 import { validate } from '../middleware/validate';
@@ -18,6 +19,7 @@ router.get('/:id', optionalAuth, validate(mongoIdParam, 'params'), vehiclesContr
 router.post(
   '/',
   authenticate,
+  hmacVerify,
   dealershipScope,
   requireRole(Role.ADMIN, Role.DEALERSHIP_STAFF),
   validate(createVehicleSchema),
@@ -26,6 +28,7 @@ router.post(
 router.patch(
   '/:id',
   authenticate,
+  hmacVerify,
   dealershipScope,
   requireRole(Role.ADMIN, Role.DEALERSHIP_STAFF),
   validate(mongoIdParam, 'params'),

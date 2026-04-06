@@ -132,6 +132,34 @@ export async function createOrderFromCart(
   return orders.length === 1 ? orders[0] : orders;
 }
 
+interface SagaStep {
+  name: string;
+  execute: () => Promise<void>;
+  compensate: () => Promise<void>;
+}
+
+async function executeSaga(steps: SagaStep[], orderId: string) {
+  const completed: SagaStep[] = [];
+  for (const step of steps) {
+    try {
+      await step.execute();
+      completed.push(step);
+    } catch (error: any) {
+      logger.error({ orderId, failedStep: step.name, error: error.message }, 'Saga step failed, compensating');
+      // Compensate in reverse order
+      for (let i = completed.length - 1; i >= 0; i--) {
+        try {
+          await completed[i].compensate();
+          logger.info({ orderId, step: completed[i].name }, 'Compensation step succeeded');
+        } catch (compErr: any) {
+          logger.error({ orderId, step: completed[i].name, error: compErr.message }, 'Compensation step failed');
+        }
+      }
+      throw error;
+    }
+  }
+}
+
 export async function transitionOrder(
   orderId: string,
   event: OrderEvent,
@@ -141,6 +169,7 @@ export async function transitionOrder(
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError('Order not found');
 
+  const originalStatus = order.status;
   const fsm = createOrderStateMachine(order.status as OrderStatus);
 
   if (!fsm.can(event)) {
@@ -149,119 +178,147 @@ export async function transitionOrder(
     );
   }
 
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('Transition timeout')), 5000)
-  );
+  const { from, to } = await fsm.transition(event);
+  const sagaSteps: SagaStep[] = [];
 
-  const transitionPromise = (async () => {
-    const { from, to } = await fsm.transition(event);
-
-    if (event === OrderEvent.CANCEL) {
-      // Release all reserved vehicles back to available
-      for (const item of order.items) {
-        await Vehicle.findByIdAndUpdate(item.vehicleId, {
-          status: VehicleStatus.AVAILABLE,
-        });
-      }
-
-      // Refund any completed payments for this order
-      const payments = await Payment.find({
-        orderId: order._id,
-        status: PaymentStatus.COMPLETED,
-      });
-      for (const payment of payments) {
-        try {
-          await refundPayment(payment._id.toString(), reason || 'Order cancelled');
-        } catch (refundErr: any) {
-          logger.error(
-            { paymentId: payment._id, orderId: order._id, error: refundErr.message },
-            'Failed to refund payment during order cancellation'
-          );
+  if (event === OrderEvent.CANCEL) {
+    // Step 1: Release vehicles
+    const vehicleUpdates: Array<{ vehicleId: any; prevStatus: string }> = [];
+    sagaSteps.push({
+      name: 'release_vehicles',
+      execute: async () => {
+        for (const item of order.items) {
+          const v = await Vehicle.findById(item.vehicleId);
+          if (v) {
+            vehicleUpdates.push({ vehicleId: item.vehicleId, prevStatus: v.status });
+            v.status = VehicleStatus.AVAILABLE;
+            await v.save();
+          }
         }
-      }
-
-      // Void any unpaid invoices
-      const invoices = await Invoice.find({
-        orderId: order._id,
-        status: { $in: [InvoiceStatus.ISSUED, InvoiceStatus.DRAFT] },
-      });
-      for (const invoice of invoices) {
-        invoice.status = InvoiceStatus.VOIDED;
-        await invoice.save();
-      }
-
-      order.cancelledAt = new Date();
-      order.cancelReason = reason || 'Cancelled by user';
-    }
-
-    if (event === OrderEvent.FULFILL) {
-      for (const item of order.items) {
-        await Vehicle.findByIdAndUpdate(item.vehicleId, {
-          status: VehicleStatus.SOLD,
-        });
-      }
-    }
-
-    order.status = to;
-    await order.save();
-
-    await OrderEventModel.create({
-      orderId: order._id,
-      fromStatus: from,
-      toStatus: to,
-      triggeredBy: userId,
-      reason,
+      },
+      compensate: async () => {
+        for (const vu of vehicleUpdates) {
+          await Vehicle.findByIdAndUpdate(vu.vehicleId, { status: vu.prevStatus });
+        }
+      },
     });
 
-    logger.info(
-      { orderId, from, to, event, userId },
-      'Order transitioned'
-    );
-
-    return order;
-  })();
-
-  try {
-    return await Promise.race([transitionPromise, timeoutPromise]);
-  } catch (error: any) {
-    if (error.message === 'Transition timeout') {
-      logger.error({ orderId, event }, 'Order transition timed out, rolling back with compensation');
-      const freshOrder = await Order.findById(orderId);
-      if (freshOrder && freshOrder.status !== order.status) {
-        // Restore order status
-        freshOrder.status = order.status as OrderStatus;
-        await freshOrder.save();
-
-        // Compensate vehicle status changes
-        if (event === OrderEvent.CANCEL) {
-          for (const item of freshOrder.items) {
-            await Vehicle.findByIdAndUpdate(item.vehicleId, {
-              status: VehicleStatus.RESERVED,
-            });
-          }
+    // Step 2: Refund payments
+    const refundedPaymentIds: string[] = [];
+    sagaSteps.push({
+      name: 'refund_payments',
+      execute: async () => {
+        const payments = await Payment.find({ orderId: order._id, status: PaymentStatus.COMPLETED });
+        for (const payment of payments) {
+          await refundPayment(payment._id.toString(), reason || 'Order cancelled');
+          refundedPaymentIds.push(payment._id.toString());
         }
-        if (event === OrderEvent.FULFILL) {
-          for (const item of freshOrder.items) {
-            await Vehicle.findByIdAndUpdate(item.vehicleId, {
-              status: VehicleStatus.RESERVED,
-            });
-          }
-        }
+      },
+      compensate: async () => {
+        // Payment refunds are financial records - log but don't reverse
+        logger.warn({ orderId, refundedPaymentIds }, 'Payment refunds cannot be automatically reversed');
+      },
+    });
 
-        await OrderEventModel.create({
-          orderId: freshOrder._id,
-          fromStatus: freshOrder.status,
-          toStatus: order.status,
-          triggeredBy: userId,
-          reason: 'Timeout rollback with compensation',
-          rolledBack: true,
-          rolledBackAt: new Date(),
+    // Step 3: Void invoices
+    const voidedInvoices: Array<{ invoiceId: any; prevStatus: string }> = [];
+    sagaSteps.push({
+      name: 'void_invoices',
+      execute: async () => {
+        const invoices = await Invoice.find({
+          orderId: order._id,
+          status: { $in: [InvoiceStatus.ISSUED, InvoiceStatus.DRAFT] },
         });
-      }
-      throw new BadRequestError('Order transition timed out');
-    }
-    throw error;
+        for (const invoice of invoices) {
+          voidedInvoices.push({ invoiceId: invoice._id, prevStatus: invoice.status });
+          invoice.status = InvoiceStatus.VOIDED;
+          await invoice.save();
+        }
+      },
+      compensate: async () => {
+        for (const vi of voidedInvoices) {
+          await Invoice.findByIdAndUpdate(vi.invoiceId, { status: vi.prevStatus });
+        }
+      },
+    });
+
+    // Step 4: Update order
+    sagaSteps.push({
+      name: 'update_order_cancelled',
+      execute: async () => {
+        order.cancelledAt = new Date();
+        order.cancelReason = reason || 'Cancelled by user';
+        order.status = to;
+        await order.save();
+      },
+      compensate: async () => {
+        order.status = originalStatus as OrderStatus;
+        order.cancelledAt = null as any;
+        order.cancelReason = null as any;
+        await order.save();
+      },
+    });
+  } else if (event === OrderEvent.FULFILL) {
+    // Step 1: Mark vehicles sold
+    const vehicleUpdates: Array<{ vehicleId: any; prevStatus: string }> = [];
+    sagaSteps.push({
+      name: 'mark_vehicles_sold',
+      execute: async () => {
+        for (const item of order.items) {
+          const v = await Vehicle.findById(item.vehicleId);
+          if (v) {
+            vehicleUpdates.push({ vehicleId: item.vehicleId, prevStatus: v.status });
+            v.status = VehicleStatus.SOLD;
+            await v.save();
+          }
+        }
+      },
+      compensate: async () => {
+        for (const vu of vehicleUpdates) {
+          await Vehicle.findByIdAndUpdate(vu.vehicleId, { status: vu.prevStatus });
+        }
+      },
+    });
+
+    // Step 2: Update order
+    sagaSteps.push({
+      name: 'update_order_status',
+      execute: async () => {
+        order.status = to;
+        await order.save();
+      },
+      compensate: async () => {
+        order.status = originalStatus as OrderStatus;
+        await order.save();
+      },
+    });
+  } else {
+    // Simple status transitions (RESERVE, INVOICE, SETTLE)
+    sagaSteps.push({
+      name: 'update_order_status',
+      execute: async () => {
+        order.status = to;
+        await order.save();
+      },
+      compensate: async () => {
+        order.status = originalStatus as OrderStatus;
+        await order.save();
+      },
+    });
   }
+
+  await executeSaga(sagaSteps, orderId);
+
+  await OrderEventModel.create({
+    orderId: order._id,
+    fromStatus: from,
+    toStatus: to,
+    triggeredBy: userId,
+    reason,
+  });
+
+  logger.info({ orderId, from, to, event, userId }, 'Order transitioned');
+  return order;
 }
 
 export async function getOrder(orderId: string) {

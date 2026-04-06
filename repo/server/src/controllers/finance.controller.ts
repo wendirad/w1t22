@@ -6,10 +6,28 @@ import * as reconciliationService from '../services/finance/reconciliation.servi
 import { DiscrepancyTicket } from '../models/discrepancy-ticket.model';
 import { logAuditEvent } from '../services/audit.service';
 import { parsePaginationParams, buildPaginatedResult } from '../lib/pagination';
-import { NotFoundError } from '../lib/errors';
+import { NotFoundError, ForbiddenError } from '../lib/errors';
+import * as orderService from '../services/order/order.service';
+import { resolveAdapter } from '../services/finance/payment-adapter';
+
+function assertFinanceAccess(order: any, req: Request) {
+  if (req.user!.role === 'admin') return;
+  if (req.user!.role === 'finance_reviewer') {
+    const userDealership = req.user!.dealershipId || req.scope?.dealershipId;
+    if (userDealership && order.dealershipId?.toString() === userDealership) return;
+  }
+  const userDealership = req.user!.dealershipId || req.scope?.dealershipId;
+  if (userDealership && order.dealershipId?.toString() === userDealership) {
+    if (order.buyerId?.toString() === req.user!.id || (order.buyerId as any)?._id?.toString() === req.user!.id) return;
+    if (req.user!.role === 'dealership_staff') return;
+  }
+  throw new ForbiddenError('You do not have access to this financial record');
+}
 
 export async function getInvoicePreview(req: Request, res: Response, next: NextFunction) {
   try {
+    const order = await orderService.getOrder(req.params.orderId);
+    assertFinanceAccess(order, req);
     const preview = await invoiceService.generateInvoicePreview(req.params.orderId);
     res.json(preview);
   } catch (error) {
@@ -19,6 +37,8 @@ export async function getInvoicePreview(req: Request, res: Response, next: NextF
 
 export async function createInvoice(req: Request, res: Response, next: NextFunction) {
   try {
+    const order = await orderService.getOrder(req.params.orderId);
+    assertFinanceAccess(order, req);
     const invoice = await invoiceService.createInvoice(req.params.orderId);
     await logAuditEvent({
       dealershipId: invoice.dealershipId?.toString(),
@@ -40,6 +60,10 @@ export async function createInvoice(req: Request, res: Response, next: NextFunct
 export async function getInvoice(req: Request, res: Response, next: NextFunction) {
   try {
     const invoice = await invoiceService.getInvoice(req.params.id);
+    if (invoice.orderId) {
+      const order = await orderService.getOrder(invoice.orderId.toString());
+      assertFinanceAccess(order, req);
+    }
     res.json(invoice);
   } catch (error) {
     next(error);
@@ -48,7 +72,15 @@ export async function getInvoice(req: Request, res: Response, next: NextFunction
 
 export async function processPayment(req: Request, res: Response, next: NextFunction) {
   try {
-    const dealershipId = req.body.dealershipId || req.scope?.dealershipId || req.user!.dealershipId;
+    // Validate payment method first — reject disabled online methods before any DB lookups
+    resolveAdapter(req.body.method);
+
+    const dealershipId = req.user!.role === 'admin'
+      ? req.scope?.dealershipId
+      : (req.user!.dealershipId || req.scope?.dealershipId);
+    // Validate order belongs to the user's dealership scope
+    const order = await orderService.getOrder(req.body.orderId);
+    assertFinanceAccess(order, req);
     const payment = await paymentService.processPayment({
       orderId: req.body.orderId,
       invoiceId: req.body.invoiceId,
@@ -76,15 +108,15 @@ export async function processPayment(req: Request, res: Response, next: NextFunc
 }
 
 function resolveAccountId(req: Request): string {
-  if (req.query.accountId) return req.query.accountId as string;
   const role = req.user!.role;
-  if (role === 'buyer') return `buyer:${req.user!.id}`;
-  const dealershipId = req.scope?.dealershipId || req.user!.dealershipId;
-  if (dealershipId && (role === 'dealership_staff' || role === 'finance_reviewer')) {
-    return `dealership:${dealershipId}`;
-  }
+  // Admins can query specific accounts via X-Dealership-Id header scope
   if (role === 'admin' && req.scope?.dealershipId) {
     return `dealership:${req.scope.dealershipId}`;
+  }
+  if (role === 'buyer') return `buyer:${req.user!.id}`;
+  const dealershipId = req.user!.dealershipId || req.scope?.dealershipId;
+  if (dealershipId && (role === 'dealership_staff' || role === 'finance_reviewer')) {
+    return `dealership:${dealershipId}`;
   }
   return `user:${req.user!.id}`;
 }
@@ -131,6 +163,8 @@ export async function runReconciliation(req: Request, res: Response, next: NextF
 
 export async function getPaymentsByOrder(req: Request, res: Response, next: NextFunction) {
   try {
+    const order = await orderService.getOrder(req.params.orderId);
+    assertFinanceAccess(order, req);
     const payments = await paymentService.getPaymentsByOrder(req.params.orderId);
     res.json(payments);
   } catch (error) {
@@ -143,8 +177,13 @@ export async function listDiscrepancyTickets(req: Request, res: Response, next: 
   try {
     const pagination = parsePaginationParams(req.query);
     const query: any = {};
-    if (req.query.dealershipId) query.dealershipId = req.query.dealershipId;
-    else if (req.scope?.dealershipId) query.dealershipId = req.scope.dealershipId;
+    // Non-admin users must be scoped to their dealership
+    if (req.user!.role !== 'admin') {
+      query.dealershipId = req.user!.dealershipId || req.scope?.dealershipId;
+    } else {
+      if (req.query.dealershipId) query.dealershipId = req.query.dealershipId;
+      else if (req.scope?.dealershipId) query.dealershipId = req.scope.dealershipId;
+    }
     if (req.query.status) query.status = req.query.status;
     if (req.query.type) query.type = req.query.type;
     if (req.query.assignedTo) query.assignedTo = req.query.assignedTo;
@@ -164,6 +203,13 @@ export async function getDiscrepancyTicket(req: Request, res: Response, next: Ne
   try {
     const ticket = await DiscrepancyTicket.findById(req.params.id);
     if (!ticket) throw new NotFoundError('Discrepancy ticket not found');
+    // Enforce dealership scope for non-admin users
+    if (req.user!.role !== 'admin') {
+      const userDealership = req.user!.dealershipId || req.scope?.dealershipId;
+      if (ticket.dealershipId?.toString() !== userDealership) {
+        throw new ForbiddenError('You do not have access to this discrepancy ticket');
+      }
+    }
     res.json(ticket);
   } catch (error) {
     next(error);
@@ -174,6 +220,14 @@ export async function updateDiscrepancyTicket(req: Request, res: Response, next:
   try {
     const ticket = await DiscrepancyTicket.findById(req.params.id);
     if (!ticket) throw new NotFoundError('Discrepancy ticket not found');
+
+    // Enforce dealership scope for non-admin users
+    if (req.user!.role !== 'admin') {
+      const userDealership = req.user!.dealershipId || req.scope?.dealershipId;
+      if (ticket.dealershipId?.toString() !== userDealership) {
+        throw new ForbiddenError('You do not have access to this discrepancy ticket');
+      }
+    }
 
     const before = { status: ticket.status, assignedTo: ticket.assignedTo };
 

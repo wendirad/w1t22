@@ -29,6 +29,9 @@ export async function addToCart(
 ) {
   const vehicle = await Vehicle.findById(vehicleId);
   if (!vehicle) throw new NotFoundError('Vehicle not found');
+  if (vehicle.dealershipId?.toString() !== dealershipId) {
+    throw new BadRequestError('Vehicle does not belong to the current dealership');
+  }
   if (vehicle.status !== VehicleStatus.AVAILABLE) {
     throw new BadRequestError('Vehicle is not available');
   }

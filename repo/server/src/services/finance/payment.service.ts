@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { Payment } from '../../models/payment.model';
 import { Invoice } from '../../models/invoice.model';
 import { Order } from '../../models/order.model';
@@ -18,6 +19,9 @@ interface PaymentInput {
 }
 
 export async function processPayment(input: PaymentInput) {
+  // Validate payment method before any DB operations
+  const adapter = resolveAdapter(input.method);
+
   const existing = await Payment.findOne({ idempotencyKey: input.idempotencyKey });
   if (existing) return existing;
 
@@ -25,6 +29,16 @@ export async function processPayment(input: PaymentInput) {
   if (!invoice) throw new NotFoundError('Invoice not found');
   if (invoice.status === InvoiceStatus.PAID) {
     throw new BadRequestError('Invoice already paid');
+  }
+
+  // Validate invoice belongs to the specified order
+  if (invoice.orderId.toString() !== input.orderId) {
+    throw new BadRequestError('Invoice does not belong to the specified order');
+  }
+
+  // Validate invoice belongs to the specified dealership
+  if (invoice.dealershipId.toString() !== input.dealershipId) {
+    throw new BadRequestError('Invoice does not belong to the specified dealership');
   }
 
   if (input.amount !== invoice.total) {
@@ -36,7 +50,11 @@ export async function processPayment(input: PaymentInput) {
   const order = await Order.findById(input.orderId);
   if (!order) throw new NotFoundError('Order not found');
 
-  const adapter = resolveAdapter(input.method);
+  // Validate order belongs to the specified dealership
+  if (order.dealershipId?.toString() !== input.dealershipId) {
+    throw new BadRequestError('Order does not belong to the specified dealership');
+  }
+
   const adapterResult = await adapter.charge({
     amount: input.amount,
     currency: 'USD',
@@ -62,40 +80,49 @@ export async function processPayment(input: PaymentInput) {
     throw new BadRequestError('Payment processing failed');
   }
 
-  const payment = new Payment({
-    dealershipId: input.dealershipId,
-    orderId: input.orderId,
-    invoiceId: input.invoiceId,
-    method: input.method as PaymentMethod,
-    amount: input.amount,
-    status: PaymentStatus.COMPLETED,
-    adapterUsed: adapter.name,
-    metadata: { ...input.metadata, adapterTransactionId: adapterResult.transactionId, ...adapterResult.metadata },
-    idempotencyKey: input.idempotencyKey,
-  });
+  // Use a transaction to atomically create payment, record ledger entry, and update invoice
+  const session = await mongoose.startSession();
+  try {
+    let payment: any;
+    await session.withTransaction(async () => {
+      payment = new Payment({
+        dealershipId: input.dealershipId,
+        orderId: input.orderId,
+        invoiceId: input.invoiceId,
+        method: input.method as PaymentMethod,
+        amount: input.amount,
+        status: PaymentStatus.COMPLETED,
+        adapterUsed: adapter.name,
+        metadata: { ...input.metadata, adapterTransactionId: adapterResult.transactionId, ...adapterResult.metadata },
+        idempotencyKey: input.idempotencyKey,
+      });
 
-  await payment.save();
+      await payment.save({ session });
 
-  await recordTransaction({
-    dealershipId: input.dealershipId,
-    debitAccountId: `buyer:${order.buyerId}`,
-    creditAccountId: `dealership:${input.dealershipId}`,
-    amount: input.amount,
-    referenceType: 'payment',
-    referenceId: payment._id.toString(),
-    description: `Payment for order ${order.orderNumber}`,
-    idempotencyKey: `payment-${payment._id}`,
-  });
+      await recordTransaction({
+        dealershipId: input.dealershipId,
+        debitAccountId: `buyer:${order.buyerId}`,
+        creditAccountId: `dealership:${input.dealershipId}`,
+        amount: input.amount,
+        referenceType: 'payment',
+        referenceId: payment._id.toString(),
+        description: `Payment for order ${order.orderNumber}`,
+        idempotencyKey: `payment-${payment._id}`,
+      });
 
-  invoice.status = InvoiceStatus.PAID;
-  await invoice.save();
+      invoice.status = InvoiceStatus.PAID;
+      await invoice.save({ session });
+    });
 
-  logger.info(
-    { paymentId: payment._id, orderId: input.orderId, amount: input.amount, method: input.method, adapter: adapter.name },
-    'Payment processed'
-  );
+    logger.info(
+      { paymentId: payment._id, orderId: input.orderId, amount: input.amount, method: input.method, adapter: adapter.name },
+      'Payment processed'
+    );
 
-  return payment;
+    return payment;
+  } finally {
+    await session.endSession();
+  }
 }
 
 export async function refundPayment(paymentId: string, reason: string) {

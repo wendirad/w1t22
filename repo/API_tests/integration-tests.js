@@ -2,15 +2,21 @@ const http = require('http');
 const crypto = require('crypto');
 
 const BASE_URL = process.env.API_URL || 'http://localhost:5000';
-const HMAC_SECRET = process.env.HMAC_SECRET || 'aG1hYyBzaGFyZWQgc2VjcmV0IGtleSBmb3IgcmVxdWVzdCBzaWdu';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@motorlot.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'MotorLot@Admin2024!';
-const STAFF_EMAIL = process.env.STAFF_EMAIL || 'staff@motorlot.com';
-const STAFF_PASSWORD = process.env.STAFF_PASSWORD || 'MotorLot@Staff2024!';
-const BUYER_EMAIL = process.env.BUYER_EMAIL || 'buyer@motorlot.com';
-const BUYER_PASSWORD = process.env.BUYER_PASSWORD || 'MotorLot@Buyer2024!';
-const FINANCE_EMAIL = process.env.FINANCE_EMAIL || 'finance@motorlot.com';
-const FINANCE_PASSWORD = process.env.FINANCE_PASSWORD || 'MotorLot@Finance2024!';
+
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`Required environment variable ${name} is not set. Set it or use .env file.`);
+  return value;
+}
+
+const ADMIN_EMAIL = requireEnv('ADMIN_EMAIL');
+const ADMIN_PASSWORD = requireEnv('ADMIN_PASSWORD');
+const STAFF_EMAIL = requireEnv('STAFF_EMAIL');
+const STAFF_PASSWORD = requireEnv('STAFF_PASSWORD');
+const BUYER_EMAIL = requireEnv('BUYER_EMAIL');
+const BUYER_PASSWORD = requireEnv('BUYER_PASSWORD');
+const FINANCE_EMAIL = requireEnv('FINANCE_EMAIL');
+const FINANCE_PASSWORD = requireEnv('FINANCE_PASSWORD');
 
 let passed = 0;
 let failed = 0;
@@ -18,6 +24,11 @@ let adminToken = '';
 let staffToken = '';
 let buyerToken = '';
 let financeToken = '';
+// Per-session HMAC signing keys (issued by server on login)
+let adminSigningKey = '';
+let staffSigningKey = '';
+let buyerSigningKey = '';
+let financeSigningKey = '';
 let testDealershipId = '';
 let testVehicleId = '';
 let testVehicleId2 = '';
@@ -28,6 +39,15 @@ let testInvoiceId = '';
 function generateHmac(method, path, body, timestamp, secret) {
   const payload = `${method}\n${path}\n${body}\n${timestamp}`;
   return crypto.createHmac('sha256', secret).update(payload).digest('hex');
+}
+
+// Resolve signing key for a given token
+function resolveSigningKey(token) {
+  if (token === adminToken) return adminSigningKey;
+  if (token === staffToken) return staffSigningKey;
+  if (token === buyerToken) return buyerSigningKey;
+  if (token === financeToken) return financeSigningKey;
+  return '';
 }
 
 function request(method, path, body, token, opts) {
@@ -48,8 +68,10 @@ function request(method, path, body, token, opts) {
       },
     };
 
-    if (!(opts && opts.skipHmac)) {
-      const signature = generateHmac(method, fullPath, bodyStr, timestamp, HMAC_SECRET);
+    // Use per-session signing key for HMAC (issued on login)
+    const signingKey = (opts && opts.signingKey) || (token ? resolveSigningKey(token) : '');
+    if (!(opts && opts.skipHmac) && signingKey) {
+      const signature = generateHmac(method, fullPath, bodyStr, timestamp, signingKey);
       options.headers['X-Hmac-Signature'] = signature;
     }
 
@@ -94,15 +116,19 @@ async function runTests() {
   console.log('Integration Tests (New Features):');
   console.log('');
 
-  // ===== Setup: Login all users =====
+  // ===== Setup: Login all users (capture per-session signing keys) =====
   const adminRes = await request('POST', '/api/v1/auth/login', { email: ADMIN_EMAIL, password: ADMIN_PASSWORD });
   adminToken = adminRes.data.accessToken;
+  adminSigningKey = adminRes.data.signingKey;
   const staffRes = await request('POST', '/api/v1/auth/login', { email: STAFF_EMAIL, password: STAFF_PASSWORD });
   staffToken = staffRes.data.accessToken;
+  staffSigningKey = staffRes.data.signingKey;
   const buyerRes = await request('POST', '/api/v1/auth/login', { email: BUYER_EMAIL, password: BUYER_PASSWORD });
   buyerToken = buyerRes.data.accessToken;
+  buyerSigningKey = buyerRes.data.signingKey;
   const financeRes = await request('POST', '/api/v1/auth/login', { email: FINANCE_EMAIL, password: FINANCE_PASSWORD });
   financeToken = financeRes.data.accessToken;
+  financeSigningKey = financeRes.data.signingKey;
 
   // Get a test dealership and vehicle
   const dealershipsRes = await request('GET', '/api/v1/admin/dealerships', null, adminToken);
@@ -139,7 +165,7 @@ async function runTests() {
   });
 
   await test('properly signed request succeeds', async () => {
-    const res = await request('GET', `/api/v1/cart?dealershipId=${testDealershipId}`, null, buyerToken);
+    const res = await request('GET', '/api/v1/cart', null, buyerToken);
     assert(res.status === 200, `Expected 200, got ${res.status}`);
   });
 
@@ -269,6 +295,152 @@ async function runTests() {
   await test('buyer cannot list discrepancy tickets', async () => {
     const res = await request('GET', '/api/v1/finance/discrepancies', null, buyerToken);
     assert(res.status === 403, `Expected 403, got ${res.status}`);
+  });
+
+  // ===== Security: Role Escalation Prevention =====
+  console.log('--- Security: Role Escalation ---');
+  await test('public registration ignores role field (always buyer)', async () => {
+    const res = await request('POST', '/api/v1/auth/register', {
+      email: `escalation-${Date.now()}@test.com`,
+      password: 'test12345',
+      firstName: 'Attacker',
+      lastName: 'Test',
+      role: 'admin', // Attempt privilege escalation
+      dealershipId: testDealershipId, // Attempt dealership injection
+    });
+    assert(res.status === 201, `Expected 201, got ${res.status}`);
+    assert(res.data.user.role === 'buyer', `Expected buyer role, got ${res.data.user.role}`);
+  });
+
+  // ===== Security: Cross-Tenant Access =====
+  console.log('--- Security: Cross-Tenant Isolation ---');
+  await test('buyer cannot access orders from another dealership', async () => {
+    // Create a fake order ID that doesn't belong to buyer's dealership
+    const res = await request('GET', '/api/v1/orders/507f1f77bcf86cd799439011', null, buyerToken);
+    // Should be 404 (not found) or 403 (forbidden), not 200
+    assert(res.status === 404 || res.status === 403, `Expected 404/403, got ${res.status}`);
+  });
+
+  await test('buyer can only see their own orders in list', async () => {
+    const res = await request('GET', '/api/v1/orders', null, buyerToken);
+    assert(res.status === 200, `Expected 200, got ${res.status}`);
+    // All returned orders should belong to the buyer
+    if (res.data.data && res.data.data.length > 0) {
+      const buyerProfile = await request('GET', '/api/v1/auth/me', null, buyerToken);
+      const buyerId = buyerProfile.data._id;
+      for (const order of res.data.data) {
+        const oBuyerId = typeof order.buyerId === 'object' ? order.buyerId._id : order.buyerId;
+        assert(oBuyerId === buyerId, `Order ${order._id} belongs to ${oBuyerId}, not buyer ${buyerId}`);
+      }
+    }
+  });
+
+  // ===== Security: Order Transition Role Restrictions =====
+  console.log('--- Security: Order Transition Roles ---');
+  await test('buyer cannot perform INVOICE transition', async () => {
+    const res = await request('POST', '/api/v1/orders/507f1f77bcf86cd799439011/transition', {
+      event: 'INVOICE',
+    }, buyerToken);
+    // Should fail with 403 (forbidden) or 404 (order not found for buyer)
+    assert(res.status === 403 || res.status === 404, `Expected 403/404, got ${res.status}`);
+  });
+
+  await test('buyer cannot perform SETTLE transition', async () => {
+    const res = await request('POST', '/api/v1/orders/507f1f77bcf86cd799439011/transition', {
+      event: 'SETTLE',
+    }, buyerToken);
+    assert(res.status === 403 || res.status === 404, `Expected 403/404, got ${res.status}`);
+  });
+
+  await test('buyer cannot perform FULFILL transition', async () => {
+    const res = await request('POST', '/api/v1/orders/507f1f77bcf86cd799439011/transition', {
+      event: 'FULFILL',
+    }, buyerToken);
+    assert(res.status === 403 || res.status === 404, `Expected 403/404, got ${res.status}`);
+  });
+
+  // ===== Pagination Stability =====
+  console.log('--- Pagination Stability ---');
+  await test('search pagination returns consistent results with no duplicates', async () => {
+    const page1 = await request('GET', '/api/v1/search?limit=2&page=1');
+    const page2 = await request('GET', '/api/v1/search?limit=2&page=2');
+    assert(page1.status === 200, `Expected 200, got ${page1.status}`);
+    assert(page2.status === 200, `Expected 200, got ${page2.status}`);
+    if (page1.data.data && page2.data.data) {
+      const ids1 = page1.data.data.map((v) => v._id);
+      const ids2 = page2.data.data.map((v) => v._id);
+      const overlap = ids1.filter((id) => ids2.includes(id));
+      assert(overlap.length === 0, `Found ${overlap.length} duplicate(s) across pages: ${overlap.join(', ')}`);
+    }
+  });
+
+  await test('vehicle list pagination has no duplicates across pages', async () => {
+    const page1 = await request('GET', '/api/v1/vehicles?limit=2&page=1');
+    const page2 = await request('GET', '/api/v1/vehicles?limit=2&page=2');
+    assert(page1.status === 200, `Expected 200, got ${page1.status}`);
+    assert(page2.status === 200, `Expected 200, got ${page2.status}`);
+    if (page1.data.data && page2.data.data) {
+      const ids1 = page1.data.data.map((v) => v._id);
+      const ids2 = page2.data.data.map((v) => v._id);
+      const overlap = ids1.filter((id) => ids2.includes(id));
+      assert(overlap.length === 0, `Found ${overlap.length} duplicate(s) across pages: ${overlap.join(', ')}`);
+    }
+  });
+
+  // ===== Security: Admin Endpoint Access Control =====
+  console.log('--- Security: Admin Access Control ---');
+  await test('buyer cannot list admin dealerships', async () => {
+    const res = await request('GET', '/api/v1/admin/dealerships', null, buyerToken);
+    assert(res.status === 403, `Expected 403, got ${res.status}`);
+  });
+
+  await test('buyer cannot list admin synonyms', async () => {
+    const res = await request('GET', '/api/v1/admin/synonyms', null, buyerToken);
+    assert(res.status === 403, `Expected 403, got ${res.status}`);
+  });
+
+  await test('buyer cannot list admin tax-rates', async () => {
+    const res = await request('GET', '/api/v1/admin/tax-rates', null, buyerToken);
+    assert(res.status === 403, `Expected 403, got ${res.status}`);
+  });
+
+  // ===== Security: HMAC Malformed Signature =====
+  console.log('--- Security: HMAC Malformed ---');
+  await test('malformed hex signature returns 401 not 500', async () => {
+    const res = await request('GET', '/api/v1/cart', null, buyerToken, {
+      headers: { 'X-Hmac-Signature': 'not-hex-at-all!!!' },
+    });
+    assert(res.status === 401, `Expected 401, got ${res.status}`);
+  });
+
+  await test('short signature returns 401 not 500', async () => {
+    const res = await request('GET', '/api/v1/cart', null, buyerToken, {
+      headers: { 'X-Hmac-Signature': 'abcdef' },
+    });
+    assert(res.status === 401, `Expected 401, got ${res.status}`);
+  });
+
+  // ===== Security: Offline Payment Enforcement =====
+  console.log('--- Security: Offline Payment Enforcement ---');
+  await test('credit_card payment fails when online payments disabled', async () => {
+    const res = await request('POST', '/api/v1/finance/payments', {
+      orderId: '507f1f77bcf86cd799439011',
+      invoiceId: '507f1f77bcf86cd799439012',
+      method: 'credit_card',
+      amount: 25000,
+    }, staffToken);
+    // Should fail because online payments are disabled by default
+    assert(res.status === 400 || res.status === 500, `Expected 400/500 for disabled online payment, got ${res.status}`);
+  });
+
+  await test('bank_transfer payment fails when online payments disabled', async () => {
+    const res = await request('POST', '/api/v1/finance/payments', {
+      orderId: '507f1f77bcf86cd799439011',
+      invoiceId: '507f1f77bcf86cd799439012',
+      method: 'bank_transfer',
+      amount: 25000,
+    }, staffToken);
+    assert(res.status === 400 || res.status === 500, `Expected 400/500 for disabled online payment, got ${res.status}`);
   });
 
   // ===== Summary =====

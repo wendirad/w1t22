@@ -1,5 +1,6 @@
 import { AuditLog } from '../models/audit-log.model';
 import { PaginationParams, buildPaginatedResult } from '../lib/pagination';
+import { sanitizeForAudit } from '../lib/logger';
 
 export async function logAuditEvent(params: {
   dealershipId?: string;
@@ -25,8 +26,8 @@ export async function logAuditEvent(params: {
       type: params.resourceType,
       id: params.resourceId,
     },
-    before: params.before || null,
-    after: params.after || null,
+    before: sanitizeForAudit(params.before),
+    after: sanitizeForAudit(params.after),
     requestId: params.requestId || '',
   });
 }

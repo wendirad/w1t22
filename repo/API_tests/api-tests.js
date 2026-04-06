@@ -2,7 +2,6 @@ const http = require('http');
 const crypto = require('crypto');
 
 const BASE_URL = process.env.API_URL || 'http://localhost:5000';
-const HMAC_SECRET = process.env.HMAC_SECRET || 'aG1hYyBzaGFyZWQgc2VjcmV0IGtleSBmb3IgcmVxdWVzdCBzaWdu';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@motorlot.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'MotorLot@Admin2024!';
 const STAFF_EMAIL = process.env.STAFF_EMAIL || 'staff@motorlot.com';
@@ -18,13 +17,28 @@ let adminToken = '';
 let staffToken = '';
 let buyerToken = '';
 let financeToken = '';
+// Per-session HMAC signing keys (issued by server on login)
+let adminSigningKey = '';
+let staffSigningKey = '';
+let buyerSigningKey = '';
+let financeSigningKey = '';
 let testDealershipId = '';
+let buyerDealershipId = '';
 let testVehicleId = '';
 let testOrderId = '';
 
 function generateHmac(method, path, body, timestamp, secret) {
   const payload = `${method}\n${path}\n${body}\n${timestamp}`;
   return crypto.createHmac('sha256', secret).update(payload).digest('hex');
+}
+
+// Resolve signing key for a given token
+function resolveSigningKey(token) {
+  if (token === adminToken) return adminSigningKey;
+  if (token === staffToken) return staffSigningKey;
+  if (token === buyerToken) return buyerSigningKey;
+  if (token === financeToken) return financeSigningKey;
+  return '';
 }
 
 function request(method, path, body, token, opts) {
@@ -45,9 +59,10 @@ function request(method, path, body, token, opts) {
       },
     };
 
-    // Generate HMAC signature unless explicitly skipped
-    if (!(opts && opts.skipHmac)) {
-      const signature = generateHmac(method, fullPath, bodyStr, timestamp, HMAC_SECRET);
+    // Use per-session signing key for HMAC (issued on login)
+    const signingKey = (opts && opts.signingKey) || (token ? resolveSigningKey(token) : '');
+    if (!(opts && opts.skipHmac) && signingKey) {
+      const signature = generateHmac(method, fullPath, bodyStr, timestamp, signingKey);
       options.headers['X-Hmac-Signature'] = signature;
     }
 
@@ -122,7 +137,9 @@ async function runTests() {
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     assert(res.data.accessToken, 'Expected access token');
     adminToken = res.data.accessToken;
+    adminSigningKey = res.data.signingKey;
     assert(res.data.user.role === 'admin', 'Expected admin role');
+    assert(res.data.signingKey, 'Expected per-session signing key');
   });
 
   // Reset test data from prior runs
@@ -134,6 +151,7 @@ async function runTests() {
     });
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     staffToken = res.data.accessToken;
+    staffSigningKey = res.data.signingKey;
   });
 
   await test('POST /auth/login with buyer', async () => {
@@ -142,6 +160,8 @@ async function runTests() {
     });
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     buyerToken = res.data.accessToken;
+    buyerSigningKey = res.data.signingKey;
+    buyerDealershipId = res.data.user.dealershipId;
   });
 
   await test('POST /auth/login with finance', async () => {
@@ -150,6 +170,7 @@ async function runTests() {
     });
     assert(res.status === 200, `Expected 200, got ${res.status}`);
     financeToken = res.data.accessToken;
+    financeSigningKey = res.data.signingKey;
   });
 
   await test('POST /auth/login with wrong password returns 401', async () => {
@@ -196,8 +217,13 @@ async function runTests() {
     assert(res.data.data, 'Expected data array');
     assert(res.data.pagination, 'Expected pagination');
     assert(res.data.data.length > 0, 'Expected at least one vehicle');
-    testVehicleId = res.data.data[0]._id;
-    testDealershipId = res.data.data[0].dealershipId;
+    // Pick a vehicle from the buyer's dealership for cart/order tests
+    const buyerVehicle = res.data.data.find((v) => {
+      const vid = typeof v.dealershipId === 'object' ? v.dealershipId._id : v.dealershipId;
+      return vid === buyerDealershipId;
+    }) || res.data.data[0];
+    testVehicleId = buyerVehicle._id;
+    testDealershipId = typeof buyerVehicle.dealershipId === 'object' ? buyerVehicle.dealershipId._id : buyerVehicle.dealershipId;
   });
 
   await test('GET /vehicles/:id returns single vehicle', async () => {

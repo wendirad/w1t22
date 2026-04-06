@@ -5,8 +5,15 @@ import { parsePaginationParams } from '../lib/pagination';
 export async function getAuditLogs(req: Request, res: Response, next: NextFunction) {
   try {
     const pagination = parsePaginationParams(req.query);
+    // Non-admin users: enforce dealership scope from auth context, never trust query param
+    let dealershipId: string | undefined;
+    if (req.user!.role === 'admin') {
+      dealershipId = req.scope?.dealershipId || req.query.dealershipId as string;
+    } else {
+      dealershipId = req.user!.dealershipId || req.scope?.dealershipId;
+    }
     const filters = {
-      dealershipId: req.query.dealershipId as string || req.scope?.dealershipId,
+      dealershipId,
       userId: req.query.userId as string,
       resourceType: req.query.resourceType as string,
       resourceId: req.query.resourceId as string,

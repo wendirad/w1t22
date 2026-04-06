@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { Dealership } from '../models/dealership.model';
-import { hmacVerify } from '../middleware/hmac-verify';
 import authRoutes from './auth.routes';
 import vehiclesRoutes from './vehicles.routes';
 import searchRoutes from './search.routes';
@@ -27,15 +26,17 @@ router.get('/dealerships', async (_req, res, next) => {
   }
 });
 
+// HMAC verification is now applied within each route file after authenticate middleware,
+// ensuring per-session signing keys are used (not a static shared secret).
 router.use('/auth', authRoutes);
 router.use('/vehicles', vehiclesRoutes);
 router.use('/search', searchRoutes);
-router.use('/cart', hmacVerify, cartRoutes);
-router.use('/orders', hmacVerify, ordersRoutes);
-router.use('/documents', hmacVerify, documentsRoutes);
-router.use('/finance', hmacVerify, financeRoutes);
-router.use('/admin', hmacVerify, adminRoutes);
-router.use('/privacy', hmacVerify, privacyRoutes);
+router.use('/cart', cartRoutes);
+router.use('/orders', ordersRoutes);
+router.use('/documents', documentsRoutes);
+router.use('/finance', financeRoutes);
+router.use('/admin', adminRoutes);
+router.use('/privacy', privacyRoutes);
 router.use('/audit', auditRoutes);
 
 export default router;

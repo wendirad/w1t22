@@ -1,14 +1,33 @@
 import { Request, Response, NextFunction } from 'express';
-import { BadRequestError } from '../lib/errors';
+import { BadRequestError, ForbiddenError } from '../lib/errors';
 import * as orderService from '../services/order/order.service';
 import { parsePaginationParams } from '../lib/pagination';
 import { logAuditEvent } from '../services/audit.service';
 
+function assertOrderAccess(order: any, req: Request) {
+  if (req.user!.role === 'admin') return;
+  const userDealership = req.user!.dealershipId || req.scope?.dealershipId;
+  if (userDealership && order.dealershipId?.toString() === userDealership) return;
+  if (order.buyerId?.toString() === req.user!.id || (order.buyerId as any)?._id?.toString() === req.user!.id) return;
+  throw new ForbiddenError('You do not have access to this order');
+}
+
+// Events that require staff/finance/admin role — buyers can only CANCEL their own orders
+const PRIVILEGED_TRANSITIONS = new Set(['INVOICE', 'SETTLE', 'FULFILL']);
+
+function assertTransitionRole(event: string, role: string) {
+  if (PRIVILEGED_TRANSITIONS.has(event) && role === 'buyer') {
+    throw new ForbiddenError(`Buyers cannot perform "${event}" transition`);
+  }
+}
+
 export async function createOrder(req: Request, res: Response, next: NextFunction) {
   try {
-    const dealershipId = req.body.dealershipId || req.scope?.dealershipId || req.user!.dealershipId;
+    const dealershipId = req.user!.role === 'admin'
+      ? req.scope?.dealershipId
+      : (req.user!.dealershipId || req.scope?.dealershipId);
     if (!dealershipId) {
-      throw new BadRequestError('dealershipId is required');
+      throw new BadRequestError('dealershipId is required. Admin must use X-Dealership-Id header.');
     }
     const idempotencyKey = req.body.idempotencyKey || req.headers['x-idempotency-key'] as string;
     const result = await orderService.createOrderFromCart(req.user!.id, dealershipId, idempotencyKey);
@@ -35,6 +54,7 @@ export async function createOrder(req: Request, res: Response, next: NextFunctio
 export async function getOrder(req: Request, res: Response, next: NextFunction) {
   try {
     const order = await orderService.getOrder(req.params.id);
+    assertOrderAccess(order, req);
     res.json(order);
   } catch (error) {
     next(error);
@@ -47,16 +67,17 @@ export async function listOrders(req: Request, res: Response, next: NextFunction
     const role = req.user!.role;
     const filters: any = { status: req.query.status as string };
 
-    if (req.query.buyerId) {
-      filters.buyerId = req.query.buyerId as string;
-    } else if (role === 'buyer') {
+    if (role === 'buyer') {
+      // Buyers can only see their own orders
       filters.buyerId = req.user!.id;
-    }
-
-    if (req.query.dealershipId) {
-      filters.dealershipId = req.query.dealershipId as string;
-    } else if (req.scope?.dealershipId) {
-      filters.dealershipId = req.scope.dealershipId;
+    } else if (role === 'admin') {
+      // Admins can optionally filter by buyer or dealership
+      if (req.query.buyerId) filters.buyerId = req.query.buyerId as string;
+      if (req.scope?.dealershipId) filters.dealershipId = req.scope.dealershipId;
+      else if (req.query.dealershipId) filters.dealershipId = req.query.dealershipId as string;
+    } else {
+      // Staff/finance: scoped to their dealership
+      filters.dealershipId = req.user!.dealershipId || req.scope?.dealershipId;
     }
     const result = await orderService.listOrders(filters, pagination);
     res.json(result);
@@ -68,7 +89,9 @@ export async function listOrders(req: Request, res: Response, next: NextFunction
 export async function transitionOrder(req: Request, res: Response, next: NextFunction) {
   try {
     const beforeOrder = await orderService.getOrder(req.params.id);
+    assertOrderAccess(beforeOrder, req);
     const { event, reason } = req.body;
+    assertTransitionRole(event, req.user!.role);
     const order = await orderService.transitionOrder(req.params.id, event, req.user!.id, reason);
     await logAuditEvent({
       dealershipId: beforeOrder.dealershipId?.toString(),
@@ -90,6 +113,8 @@ export async function transitionOrder(req: Request, res: Response, next: NextFun
 
 export async function getOrderEvents(req: Request, res: Response, next: NextFunction) {
   try {
+    const order = await orderService.getOrder(req.params.id);
+    assertOrderAccess(order, req);
     const events = await orderService.getOrderEvents(req.params.id);
     res.json(events);
   } catch (error) {
@@ -100,6 +125,11 @@ export async function getOrderEvents(req: Request, res: Response, next: NextFunc
 export async function mergeOrders(req: Request, res: Response, next: NextFunction) {
   try {
     const { orderIds } = req.body;
+    // Validate access to all orders before merging
+    for (const oid of orderIds) {
+      const order = await orderService.getOrder(oid);
+      assertOrderAccess(order, req);
+    }
     const merged = await orderService.mergeOrders(orderIds, req.user!.id);
     await logAuditEvent({
       dealershipId: (merged as any).dealershipId?.toString(),

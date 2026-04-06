@@ -49,6 +49,24 @@ export default function DocumentsPage() {
     if (file) setUploadForm((prev) => ({ ...prev, file }));
   }, []);
 
+  const downloadDoc = useCallback(async (docId: string, filename: string) => {
+    try {
+      const response = await httpClient.get(`/documents/${docId}/download`, {
+        responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      alert('Download failed. You may not have permission.');
+    }
+  }, []);
+
   const canManage = user?.role === 'admin' || user?.role === 'dealership_staff';
 
   if (isLoading) return <Spinner className="py-12" />;
@@ -95,14 +113,12 @@ export default function DocumentsPage() {
               </div>
 
               <div className="flex gap-2">
-                <a
-                  href={`/api/v1/documents/${doc._id}/download`}
+                <button
+                  onClick={() => downloadDoc(doc._id, doc.originalFilename)}
                   className="btn-secondary text-xs flex-1 text-center"
-                  target="_blank"
-                  rel="noopener"
                 >
                   Download
-                </a>
+                </button>
                 {canManage && (
                   <button
                     onClick={() => { if (window.confirm('Delete this document?')) deleteDoc.mutate(doc._id); }}

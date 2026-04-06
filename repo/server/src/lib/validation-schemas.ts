@@ -1,12 +1,13 @@
 import { z } from 'zod';
 
 // Auth
+// Public registration: role is NOT accepted — always creates buyer
+// dealershipId is optional — allows buyer to associate with a dealership at registration
 export const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
-  role: z.enum(['buyer', 'dealership_staff', 'finance_reviewer', 'admin']).optional(),
   dealershipId: z.string().optional(),
 });
 
@@ -47,19 +48,17 @@ export const updateVehicleSchema = createVehicleSchema.extend({
   status: z.enum(['available', 'reserved', 'sold']).optional(),
 }).partial();
 
-// Cart
+// Cart — dealershipId derived from auth context, not accepted from client
 export const addToCartSchema = z.object({
   vehicleId: z.string().min(1),
   addOnServices: z.array(z.object({
     serviceCode: z.string(),
   })).optional(),
-  dealershipId: z.string().optional(),
 });
 
-// Orders
+// Orders — dealershipId derived from auth context, not accepted from client
 export const createOrderSchema = z.object({
   idempotencyKey: z.string().optional(),
-  dealershipId: z.string().optional(),
 });
 
 export const transitionOrderSchema = z.object({
@@ -68,16 +67,16 @@ export const transitionOrderSchema = z.object({
 });
 
 export const mergeOrdersSchema = z.object({
-  orderIds: z.array(z.string().min(1)).min(2),
+  orderIds: z.array(z.string().min(1)).min(2).max(20),
 });
 
 // Documents
+// Documents — dealershipId derived from auth context, not accepted from client
 export const uploadDocumentBodySchema = z.object({
   type: z.enum(['title', 'buyers_order', 'inspection', 'other']).optional(),
   orderId: z.string().optional(),
   vehicleId: z.string().optional(),
   sensitiveFlag: z.string().optional(),
-  dealershipId: z.string().optional(),
 });
 
 export const documentActionSchema = z.object({
@@ -86,11 +85,10 @@ export const documentActionSchema = z.object({
   comment: z.string().optional(),
 });
 
-// Finance
+// Finance — dealershipId derived from auth context, not accepted from client
 export const processPaymentSchema = z.object({
   orderId: z.string().min(1),
   invoiceId: z.string().min(1),
-  dealershipId: z.string().optional(),
   method: z.enum(['cash', 'cashier_check', 'in_house_financing', 'credit_card', 'bank_transfer']),
   amount: z.number().positive(),
   idempotencyKey: z.string().optional(),

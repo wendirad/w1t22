@@ -113,7 +113,7 @@ export async function downloadDocument(documentId: string) {
 }
 
 export async function listDocuments(
-  filters: { dealershipId?: string; orderId?: string; uploadedBy?: string; type?: string },
+  filters: { dealershipId?: string; orderId?: string; uploadedBy?: string; type?: string; sensitiveFlag?: boolean },
   pagination: PaginationParams
 ) {
   const query: any = { quarantined: false };
@@ -121,6 +121,7 @@ export async function listDocuments(
   if (filters.orderId) query.orderId = filters.orderId;
   if (filters.uploadedBy) query.uploadedBy = filters.uploadedBy;
   if (filters.type) query.type = filters.type;
+  if (filters.sensitiveFlag !== undefined) query.sensitiveFlag = filters.sensitiveFlag;
 
   const sort: any = { [pagination.sortBy]: pagination.sortOrder === 'asc' ? 1 : -1 };
   const skip = (pagination.page - 1) * pagination.limit;

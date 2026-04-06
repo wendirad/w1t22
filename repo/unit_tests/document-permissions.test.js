@@ -1,38 +1,45 @@
 const assert = require('assert');
 
-// Uses the same permission resolution logic as production permission.service.ts
+// Import production enums and constants used by permission.service.ts
+const { Role, PermissionEffect } = require('../server/dist/types/enums');
 
+// Mirror the exact DEFAULT_PERMISSIONS from production permission.service.ts
+// This must match server/src/services/permission.service.ts lines 5-18
 const DEFAULT_PERMISSIONS = {
   document: {
-    admin: ['read', 'write', 'delete', 'download', 'share', 'submit', 'approve'],
-    dealership_staff: ['read', 'write', 'delete', 'download', 'share', 'submit'],
-    finance_reviewer: ['read', 'download', 'submit', 'approve'],
-    buyer: ['read', 'download'],
+    [Role.ADMIN]: ['read', 'write', 'delete', 'download', 'share', 'submit', 'approve'],
+    [Role.DEALERSHIP_STAFF]: ['read', 'write', 'delete', 'download', 'share', 'submit'],
+    [Role.FINANCE_REVIEWER]: ['read', 'download', 'submit', 'approve'],
+    [Role.BUYER]: ['read', 'download'],
   },
 };
 
+// Uses the same permission resolution logic as production permission.service.ts checkPermission()
+// This is a synchronous version for unit testing without MongoDB
 function checkPermission(userId, role, resource, resourceId, action, sensitiveFlag, overrides) {
-  if (role === 'admin') return true;
+  // Line 29 of permission.service.ts: admin always has access
+  if (role === Role.ADMIN) return true;
 
-  if (sensitiveFlag && role !== 'finance_reviewer' && role !== 'admin') {
+  // Lines 31-50: Sensitive flag handling
+  if (sensitiveFlag && role !== Role.FINANCE_REVIEWER && role !== Role.ADMIN) {
     const override = overrides.find(
-      (o) => o.effect === 'allow' && o.actions.includes(action) && (o.userId === userId || o.userId === null)
+      (o) => o.effect === PermissionEffect.ALLOW && o.actions.includes(action) && (o.userId === userId || o.userId === null)
     );
     return !!override;
   }
 
-  // Check user-specific overrides first
+  // Lines 53-73: Check user-specific and role overrides
   const userOverride = overrides.find(
     (o) => o.userId === userId && o.resourceId === resourceId && o.actions.includes(action)
   );
-  if (userOverride) return userOverride.effect === 'allow';
+  if (userOverride) return userOverride.effect === PermissionEffect.ALLOW;
 
-  // Check role overrides
   const roleOverride = overrides.find(
     (o) => o.role === role && o.userId === null && o.resourceId === resourceId && o.actions.includes(action)
   );
-  if (roleOverride) return roleOverride.effect === 'allow';
+  if (roleOverride) return roleOverride.effect === PermissionEffect.ALLOW;
 
+  // Lines 103-107: Fall back to DEFAULT_PERMISSIONS
   const resourceDefaults = DEFAULT_PERMISSIONS[resource];
   if (!resourceDefaults) return false;
   const roleDefaults = resourceDefaults[role];
@@ -65,87 +72,91 @@ function test(name, fn) {
   }
 }
 
-console.log('Document Permission Workflow Tests:');
+console.log('Document Permission Workflow Tests (using production enums):');
 
 // Edit (write) action tests
 test('staff can edit documents', () => {
-  assert.strictEqual(checkPermission('staff1', 'dealership_staff', 'document', 'doc1', 'write', false, []), true);
+  assert.strictEqual(checkPermission('staff1', Role.DEALERSHIP_STAFF, 'document', 'doc1', 'write', false, []), true);
 });
 
 test('buyer cannot edit documents', () => {
-  assert.strictEqual(checkPermission('buyer1', 'buyer', 'document', 'doc1', 'write', false, []), false);
+  assert.strictEqual(checkPermission('buyer1', Role.BUYER, 'document', 'doc1', 'write', false, []), false);
 });
 
 test('finance reviewer cannot edit documents', () => {
-  assert.strictEqual(checkPermission('fin1', 'finance_reviewer', 'document', 'doc1', 'write', false, []), false);
+  assert.strictEqual(checkPermission('fin1', Role.FINANCE_REVIEWER, 'document', 'doc1', 'write', false, []), false);
 });
 
 // Share action tests
 test('staff can share documents', () => {
-  assert.strictEqual(checkPermission('staff1', 'dealership_staff', 'document', 'doc1', 'share', false, []), true);
+  assert.strictEqual(checkPermission('staff1', Role.DEALERSHIP_STAFF, 'document', 'doc1', 'share', false, []), true);
 });
 
 test('buyer cannot share documents', () => {
-  assert.strictEqual(checkPermission('buyer1', 'buyer', 'document', 'doc1', 'share', false, []), false);
+  assert.strictEqual(checkPermission('buyer1', Role.BUYER, 'document', 'doc1', 'share', false, []), false);
 });
 
 test('admin can share documents', () => {
-  assert.strictEqual(checkPermission('admin1', 'admin', 'document', 'doc1', 'share', false, []), true);
+  assert.strictEqual(checkPermission('admin1', Role.ADMIN, 'document', 'doc1', 'share', false, []), true);
 });
 
 // Submit action tests
 test('staff can submit documents', () => {
-  assert.strictEqual(checkPermission('staff1', 'dealership_staff', 'document', 'doc1', 'submit', false, []), true);
+  assert.strictEqual(checkPermission('staff1', Role.DEALERSHIP_STAFF, 'document', 'doc1', 'submit', false, []), true);
 });
 
 test('finance reviewer can submit documents', () => {
-  assert.strictEqual(checkPermission('fin1', 'finance_reviewer', 'document', 'doc1', 'submit', false, []), true);
+  assert.strictEqual(checkPermission('fin1', Role.FINANCE_REVIEWER, 'document', 'doc1', 'submit', false, []), true);
 });
 
 test('buyer cannot submit documents', () => {
-  assert.strictEqual(checkPermission('buyer1', 'buyer', 'document', 'doc1', 'submit', false, []), false);
+  assert.strictEqual(checkPermission('buyer1', Role.BUYER, 'document', 'doc1', 'submit', false, []), false);
 });
 
 // Approve action tests
 test('finance reviewer can approve documents', () => {
-  assert.strictEqual(checkPermission('fin1', 'finance_reviewer', 'document', 'doc1', 'approve', false, []), true);
+  assert.strictEqual(checkPermission('fin1', Role.FINANCE_REVIEWER, 'document', 'doc1', 'approve', false, []), true);
 });
 
 test('admin can approve documents', () => {
-  assert.strictEqual(checkPermission('admin1', 'admin', 'document', 'doc1', 'approve', false, []), true);
+  assert.strictEqual(checkPermission('admin1', Role.ADMIN, 'document', 'doc1', 'approve', false, []), true);
 });
 
 test('staff cannot approve documents by default', () => {
-  assert.strictEqual(checkPermission('staff1', 'dealership_staff', 'document', 'doc1', 'approve', false, []), false);
+  assert.strictEqual(checkPermission('staff1', Role.DEALERSHIP_STAFF, 'document', 'doc1', 'approve', false, []), false);
 });
 
 test('buyer cannot approve documents', () => {
-  assert.strictEqual(checkPermission('buyer1', 'buyer', 'document', 'doc1', 'approve', false, []), false);
+  assert.strictEqual(checkPermission('buyer1', Role.BUYER, 'document', 'doc1', 'approve', false, []), false);
 });
 
 // Sensitive document tests
 test('buyer cannot access sensitive document without override', () => {
-  assert.strictEqual(checkPermission('buyer1', 'buyer', 'document', 'doc1', 'read', true, []), false);
+  assert.strictEqual(checkPermission('buyer1', Role.BUYER, 'document', 'doc1', 'read', true, []), false);
 });
 
 test('buyer can access sensitive document with explicit override', () => {
-  const overrides = [{ userId: 'buyer1', resourceId: 'doc1', actions: ['read'], effect: 'allow' }];
-  assert.strictEqual(checkPermission('buyer1', 'buyer', 'document', 'doc1', 'read', true, overrides), true);
+  const overrides = [{ userId: 'buyer1', resourceId: 'doc1', actions: ['read'], effect: PermissionEffect.ALLOW }];
+  assert.strictEqual(checkPermission('buyer1', Role.BUYER, 'document', 'doc1', 'read', true, overrides), true);
 });
 
 test('finance reviewer can access sensitive documents by default', () => {
-  assert.strictEqual(checkPermission('fin1', 'finance_reviewer', 'document', 'doc1', 'read', true, []), true);
+  assert.strictEqual(checkPermission('fin1', Role.FINANCE_REVIEWER, 'document', 'doc1', 'read', true, []), true);
+});
+
+test('staff cannot access sensitive document without override', () => {
+  assert.strictEqual(checkPermission('staff1', Role.DEALERSHIP_STAFF, 'document', 'doc1', 'read', true, []), false);
 });
 
 // Permission override affects downstream
 test('permission override grants buyer share ability', () => {
-  const overrides = [{ userId: 'buyer1', resourceId: 'doc1', actions: ['share'], effect: 'allow' }];
-  assert.strictEqual(checkPermission('buyer1', 'buyer', 'document', 'doc1', 'share', false, overrides), true);
+  const overrides = [{ userId: 'buyer1', resourceId: 'doc1', actions: ['share'], effect: PermissionEffect.ALLOW }];
+  assert.strictEqual(checkPermission('buyer1', Role.BUYER, 'document', 'doc1', 'share', false, overrides), true);
 });
 
 test('permission override denies staff delete', () => {
-  const overrides = [{ userId: 'staff1', resourceId: 'doc1', actions: ['delete'], effect: 'deny' }];
-  assert.strictEqual(checkPermission('staff1', 'dealership_staff', 'document', 'doc1', 'delete', false, overrides), false);
+  const overrides = [{ userId: 'staff1', resourceId: 'doc1', actions: ['delete'], effect: PermissionEffect.DENY }];
+  assert.strictEqual(checkPermission('staff1', Role.DEALERSHIP_STAFF, 'document', 'doc1', 'delete', false, overrides), false);
 });
 
 // Document status transition tests

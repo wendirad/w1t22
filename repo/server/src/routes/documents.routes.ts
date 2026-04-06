@@ -2,9 +2,10 @@ import { Router } from 'express';
 import multer from 'multer';
 import * as documentsController from '../controllers/documents.controller';
 import { authenticate } from '../middleware/auth';
+import { hmacVerify } from '../middleware/hmac-verify';
 import { dealershipScope } from '../middleware/dealership-scope';
 import { validate } from '../middleware/validate';
-import { mongoIdParam, documentActionSchema } from '../lib/validation-schemas';
+import { mongoIdParam, documentActionSchema, uploadDocumentBodySchema } from '../lib/validation-schemas';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -13,9 +14,9 @@ const upload = multer({
 
 const router = Router();
 
-router.use(authenticate, dealershipScope);
+router.use(authenticate, hmacVerify, dealershipScope);
 
-router.post('/upload', upload.single('file'), documentsController.uploadDocument);
+router.post('/upload', upload.single('file'), validate(uploadDocumentBodySchema), documentsController.uploadDocument);
 router.get('/', documentsController.listDocuments);
 router.get('/:id', validate(mongoIdParam, 'params'), documentsController.getDocument);
 router.get('/:id/download', validate(mongoIdParam, 'params'), documentsController.downloadDocument);

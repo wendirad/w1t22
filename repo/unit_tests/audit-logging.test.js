@@ -1,50 +1,5 @@
 const assert = require('assert');
-
-// Simulate audit logging from production code
-
-class AuditStore {
-  constructor() { this.logs = []; }
-
-  create(entry) {
-    const record = {
-      _id: `audit-${this.logs.length}`,
-      ...entry,
-      timestamp: new Date(),
-    };
-    this.logs.push(record);
-    return record;
-  }
-
-  find(filters) {
-    return this.logs.filter((log) => {
-      if (filters.dealershipId && log.dealershipId !== filters.dealershipId) return false;
-      if (filters['actor.userId'] && log.actor.userId !== filters['actor.userId']) return false;
-      if (filters['resource.type'] && log.resource.type !== filters['resource.type']) return false;
-      if (filters['resource.id'] && log.resource.id !== filters['resource.id']) return false;
-      if (filters.action && !log.action.match(new RegExp(filters.action, 'i'))) return false;
-      return true;
-    });
-  }
-}
-
-function logAuditEvent(store, params) {
-  return store.create({
-    dealershipId: params.dealershipId || null,
-    actor: {
-      userId: params.userId,
-      role: params.role,
-      ip: params.ip,
-    },
-    action: params.action,
-    resource: {
-      type: params.resourceType,
-      id: params.resourceId,
-    },
-    before: params.before || null,
-    after: params.after || null,
-    requestId: params.requestId || '',
-  });
-}
+const { sanitizeForAudit } = require('../server/src/lib/logger');
 
 let passed = 0;
 let failed = 0;
@@ -60,194 +15,116 @@ function test(name, fn) {
   }
 }
 
-console.log('Audit Logging Tests:');
+console.log('Audit Logging & Sanitization Tests (using production sanitizer):');
 
-test('order creation generates audit record', () => {
-  const store = new AuditStore();
-  const entry = logAuditEvent(store, {
-    dealershipId: 'deal1',
-    userId: 'user1',
-    role: 'buyer',
-    ip: '127.0.0.1',
-    action: 'order.create',
-    resourceType: 'order',
-    resourceId: 'ord1',
-    after: { orderNumber: 'ORD-001', status: 'created', totals: { total: 25000 } },
-    requestId: 'req-1',
-  });
-
-  assert.strictEqual(store.logs.length, 1);
-  assert.strictEqual(entry.action, 'order.create');
-  assert.strictEqual(entry.resource.type, 'order');
-  assert.strictEqual(entry.resource.id, 'ord1');
-  assert.strictEqual(entry.actor.userId, 'user1');
-  assert.strictEqual(entry.actor.role, 'buyer');
+// Sanitizer tests — sensitive data must never appear in audit logs
+test('sanitizer redacts SSN from audit data', () => {
+  const data = { userId: 'u1', profile: { firstName: 'John', ssn: '123-45-6789' } };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.profile.ssn, '[REDACTED]');
+  assert.strictEqual(result.profile.firstName, 'John');
 });
 
-test('order transition audit has before/after state', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, {
-    dealershipId: 'deal1',
-    userId: 'staff1',
-    role: 'dealership_staff',
-    ip: '10.0.0.1',
-    action: 'order.transition.RESERVE',
-    resourceType: 'order',
-    resourceId: 'ord1',
-    before: { status: 'created' },
-    after: { status: 'reserved', reason: 'Ready to reserve' },
-    requestId: 'req-2',
-  });
-
-  const log = store.logs[0];
-  assert.deepStrictEqual(log.before, { status: 'created' });
-  assert.deepStrictEqual(log.after.status, 'reserved');
+test('sanitizer redacts driversLicense from audit data', () => {
+  const data = { driversLicense: 'DL-12345678' };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.driversLicense, '[REDACTED]');
 });
 
-test('invoice creation audit includes financial data', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, {
-    dealershipId: 'deal1',
-    userId: 'staff1',
-    role: 'dealership_staff',
-    ip: '10.0.0.1',
-    action: 'invoice.create',
-    resourceType: 'invoice',
-    resourceId: 'inv1',
-    after: { invoiceNumber: 'INV-001', total: 27225, status: 'issued' },
-  });
-
-  const log = store.logs[0];
-  assert.strictEqual(log.action, 'invoice.create');
-  assert.strictEqual(log.after.invoiceNumber, 'INV-001');
-  assert.strictEqual(log.after.total, 27225);
+test('sanitizer redacts encrypted field metadata', () => {
+  const data = {
+    profile: {
+      ssnEncrypted: { ciphertext: 'abc', iv: 'def', tag: 'ghi', keyVersion: 'v1' },
+      driversLicenseEncrypted: { ciphertext: 'xyz' },
+    },
+  };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.profile.ssnEncrypted, '[REDACTED]');
+  assert.strictEqual(result.profile.driversLicenseEncrypted, '[REDACTED]');
 });
 
-test('payment processing audit records adapter info', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, {
-    dealershipId: 'deal1',
-    userId: 'buyer1',
-    role: 'buyer',
-    ip: '192.168.1.1',
-    action: 'payment.process',
-    resourceType: 'payment',
-    resourceId: 'pay1',
-    after: { amount: 27225, method: 'credit_card', status: 'completed', adapterUsed: 'online' },
-  });
-
-  const log = store.logs[0];
-  assert.strictEqual(log.action, 'payment.process');
-  assert.strictEqual(log.after.adapterUsed, 'online');
+test('sanitizer redacts password and tokens', () => {
+  const data = { password: 'secret123', refreshToken: 'tok-abc', accessToken: 'tok-def' };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.password, '[REDACTED]');
+  assert.strictEqual(result.refreshToken, '[REDACTED]');
+  assert.strictEqual(result.accessToken, '[REDACTED]');
 });
 
-test('document upload audit records file metadata', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, {
-    dealershipId: 'deal1',
-    userId: 'staff1',
-    role: 'dealership_staff',
-    ip: '10.0.0.1',
-    action: 'document.upload',
-    resourceType: 'document',
-    resourceId: 'doc1',
-    after: { filename: 'title.pdf', type: 'title', sensitiveFlag: true, quarantined: false },
-  });
-
-  const log = store.logs[0];
-  assert.strictEqual(log.resource.type, 'document');
-  assert.strictEqual(log.after.sensitiveFlag, true);
+test('sanitizer preserves non-sensitive fields', () => {
+  const data = { email: 'user@test.com', role: 'buyer', status: 'active' };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.email, 'user@test.com');
+  assert.strictEqual(result.role, 'buyer');
+  assert.strictEqual(result.status, 'active');
 });
 
-test('document deletion audit records before state', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, {
-    dealershipId: 'deal1',
-    userId: 'admin1',
-    role: 'admin',
-    ip: '10.0.0.1',
-    action: 'document.delete',
-    resourceType: 'document',
-    resourceId: 'doc1',
-    before: { filename: 'old-file.pdf', type: 'other' },
-  });
-
-  const log = store.logs[0];
-  assert.strictEqual(log.action, 'document.delete');
-  assert.strictEqual(log.before.filename, 'old-file.pdf');
-  assert.strictEqual(log.after, null);
+test('sanitizer handles null input', () => {
+  assert.strictEqual(sanitizeForAudit(null), null);
+  assert.strictEqual(sanitizeForAudit(undefined), null);
 });
 
-test('audit logs are filterable by dealershipId', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, { dealershipId: 'deal1', userId: 'u1', role: 'admin', ip: '', action: 'order.create', resourceType: 'order', resourceId: 'o1' });
-  logAuditEvent(store, { dealershipId: 'deal2', userId: 'u2', role: 'admin', ip: '', action: 'order.create', resourceType: 'order', resourceId: 'o2' });
-  logAuditEvent(store, { dealershipId: 'deal1', userId: 'u1', role: 'admin', ip: '', action: 'invoice.create', resourceType: 'invoice', resourceId: 'i1' });
-
-  const filtered = store.find({ dealershipId: 'deal1' });
-  assert.strictEqual(filtered.length, 2);
+test('sanitizer handles nested objects', () => {
+  const data = {
+    before: { profile: { ssn: '111-22-3333', firstName: 'Jane' } },
+    after: { profile: { ssn: '444-55-6666', firstName: 'Jane' } },
+  };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.before.profile.ssn, '[REDACTED]');
+  assert.strictEqual(result.after.profile.ssn, '[REDACTED]');
+  assert.strictEqual(result.before.profile.firstName, 'Jane');
 });
 
-test('audit logs are filterable by userId', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, { userId: 'user-a', role: 'buyer', ip: '', action: 'order.create', resourceType: 'order', resourceId: 'o1' });
-  logAuditEvent(store, { userId: 'user-b', role: 'admin', ip: '', action: 'order.create', resourceType: 'order', resourceId: 'o2' });
+test('audit record for profile update does not leak PII', () => {
+  // Simulate what auth.controller does: audit before/after profile update
+  const before = { profile: { firstName: 'John', lastName: 'Doe', ssn: '123-45-6789', driversLicense: 'DL-999' } };
+  const after = { profile: { firstName: 'John', lastName: 'Smith', ssn: '123-45-6789', driversLicense: 'DL-999' } };
 
-  const filtered = store.find({ 'actor.userId': 'user-a' });
-  assert.strictEqual(filtered.length, 1);
-  assert.strictEqual(filtered[0].actor.userId, 'user-a');
+  const sanitizedBefore = sanitizeForAudit(before);
+  const sanitizedAfter = sanitizeForAudit(after);
+
+  assert.strictEqual(sanitizedBefore.profile.ssn, '[REDACTED]');
+  assert.strictEqual(sanitizedBefore.profile.driversLicense, '[REDACTED]');
+  assert.strictEqual(sanitizedAfter.profile.ssn, '[REDACTED]');
+  assert.strictEqual(sanitizedAfter.profile.driversLicense, '[REDACTED]');
+  // Non-sensitive data preserved
+  assert.strictEqual(sanitizedBefore.profile.firstName, 'John');
+  assert.strictEqual(sanitizedAfter.profile.lastName, 'Smith');
 });
 
-test('audit logs are filterable by resource type', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, { userId: 'u1', role: 'admin', ip: '', action: 'order.create', resourceType: 'order', resourceId: 'o1' });
-  logAuditEvent(store, { userId: 'u1', role: 'admin', ip: '', action: 'document.upload', resourceType: 'document', resourceId: 'd1' });
-  logAuditEvent(store, { userId: 'u1', role: 'admin', ip: '', action: 'payment.process', resourceType: 'payment', resourceId: 'p1' });
-
-  const filtered = store.find({ 'resource.type': 'document' });
-  assert.strictEqual(filtered.length, 1);
+test('passwordHash is redacted', () => {
+  const data = { email: 'a@b.com', passwordHash: '$2a$12$abc...' };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.passwordHash, '[REDACTED]');
 });
 
-test('audit actor IP is persisted', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, { userId: 'u1', role: 'admin', ip: '203.0.113.42', action: 'test', resourceType: 'test', resourceId: 't1' });
-  assert.strictEqual(store.logs[0].actor.ip, '203.0.113.42');
+test('creditCard field is redacted', () => {
+  const data = { creditCard: '4111-1111-1111-1111', amount: 5000 };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.creditCard, '[REDACTED]');
+  assert.strictEqual(result.amount, 5000);
 });
 
-test('audit requestId is persisted', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, { userId: 'u1', role: 'admin', ip: '', action: 'test', resourceType: 'test', resourceId: 't1', requestId: 'req-abc-123' });
-  assert.strictEqual(store.logs[0].requestId, 'req-abc-123');
+test('bankAccount and routingNumber are redacted', () => {
+  const data = { bankAccount: '123456789', routingNumber: '021000021' };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.bankAccount, '[REDACTED]');
+  assert.strictEqual(result.routingNumber, '[REDACTED]');
 });
 
-test('permission override CRUD generates audit records', () => {
-  const store = new AuditStore();
-  logAuditEvent(store, {
-    dealershipId: 'deal1',
-    userId: 'admin1',
-    role: 'admin',
-    ip: '10.0.0.1',
-    action: 'permission_override.create',
-    resourceType: 'permission_override',
-    resourceId: 'po1',
-    after: { resource: 'document', actions: ['read'], effect: 'allow', userId: 'buyer1' },
-  });
+test('taxId is redacted', () => {
+  const data = { taxId: '12-3456789', businessName: 'Acme Motors' };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.taxId, '[REDACTED]');
+  assert.strictEqual(result.businessName, 'Acme Motors');
+});
 
-  logAuditEvent(store, {
-    dealershipId: 'deal1',
-    userId: 'admin1',
-    role: 'admin',
-    ip: '10.0.0.1',
-    action: 'permission_override.delete',
-    resourceType: 'permission_override',
-    resourceId: 'po1',
-    before: { resource: 'document', actions: ['read'], effect: 'allow', userId: 'buyer1' },
-  });
-
-  const logs = store.find({ 'resource.type': 'permission_override' });
-  assert.strictEqual(logs.length, 2);
-  assert.strictEqual(logs[0].action, 'permission_override.create');
-  assert.strictEqual(logs[1].action, 'permission_override.delete');
+test('encryption keys and secrets are redacted', () => {
+  const data = { masterEncryptionKey: 'abcdef0123456789', hmacSecret: 'secret123', jwtSecret: 'jwt456' };
+  const result = sanitizeForAudit(data);
+  assert.strictEqual(result.masterEncryptionKey, '[REDACTED]');
+  assert.strictEqual(result.hmacSecret, '[REDACTED]');
+  assert.strictEqual(result.jwtSecret, '[REDACTED]');
 });
 
 console.log(`\nAudit Logging: ${passed} passed, ${failed} failed`);

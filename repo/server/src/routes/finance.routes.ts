@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as financeController from '../controllers/finance.controller';
 import { authenticate } from '../middleware/auth';
+import { hmacVerify } from '../middleware/hmac-verify';
 import { requireRole } from '../middleware/rbac';
 import { dealershipScope } from '../middleware/dealership-scope';
 import { validate } from '../middleware/validate';
@@ -9,7 +10,7 @@ import { processPaymentSchema, orderIdParam, mongoIdParam } from '../lib/validat
 
 const router = Router();
 
-router.use(authenticate, dealershipScope);
+router.use(authenticate, hmacVerify, dealershipScope);
 
 router.get('/invoices/:orderId/preview', validate(orderIdParam, 'params'), financeController.getInvoicePreview);
 router.post('/invoices/:orderId', validate(orderIdParam, 'params'), financeController.createInvoice);
