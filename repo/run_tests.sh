@@ -6,7 +6,7 @@ cleanup() {
   echo "----------------------------------------"
 
   echo "Stopping docker compose services and removing local images..."
-  docker compose down --remove-orphans --rmi local || true
+  docker compose down --remove-orphans --rmi local -v || true
 
   echo "Restoring original .env.example..."
   if [ -f .env.example.backup ]; then
@@ -22,6 +22,11 @@ teardown_and_exit() {
   cleanup
   exit $exit_code
 }
+
+# Ensure the test run starts from a clean compose state so stale MongoDB data
+# cannot skip the seed fixtures used by the API auth tests.
+echo "Resetting previous docker compose state..."
+docker compose down --remove-orphans --rmi local -v || true
 
 # Backup original .env.example and create test version
 if [ -f .env.example ] && [ ! -f .env.example.backup ]; then
