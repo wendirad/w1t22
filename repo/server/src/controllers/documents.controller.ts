@@ -114,20 +114,46 @@ export async function listDocuments(req: Request, res: Response, next: NextFunct
   try {
     const pagination = parsePaginationParams(req.query);
     const role = req.user!.role;
+    const dealershipId = role === 'admin'
+      ? (req.scope?.dealershipId || req.query.dealershipId as string)
+      : (req.user!.dealershipId || req.scope?.dealershipId);
     const filters: any = {
-      dealershipId: role === 'admin'
-        ? (req.scope?.dealershipId || req.query.dealershipId as string)
-        : (req.user!.dealershipId || req.scope?.dealershipId),
+      dealershipId,
       orderId: req.query.orderId as string,
       uploadedBy: req.query.uploadedBy as string,
       type: req.query.type as string,
     };
-    // Non-privileged users must not see sensitive documents in listings
-    // unless they have explicit overrides (which are checked on individual access)
-    if (role !== 'admin' && role !== 'finance_reviewer') {
-      filters.sensitiveFlag = false;
-    }
+    // Admins and finance reviewers see everything including sensitive docs.
+    // All other roles: fetch all documents, then filter out sensitive ones
+    // the user has no explicit override for. This ensures that shared sensitive
+    // documents appear in listings — not just on direct access.
     const result = await documentService.listDocuments(filters, pagination);
+
+    if (role !== 'admin' && role !== 'finance_reviewer' && dealershipId) {
+      const filtered = [];
+      for (const doc of result.data) {
+        if (!doc.sensitiveFlag) {
+          filtered.push(doc);
+        } else {
+          // Check if this specific user has an override granting read access
+          const allowed = await checkPermission(
+            req.user!.id,
+            role,
+            dealershipId,
+            'document',
+            doc._id.toString(),
+            'read',
+            true, // sensitiveFlag
+          );
+          if (allowed) {
+            filtered.push(doc);
+          }
+        }
+      }
+      result.data = filtered;
+      result.pagination.total = filtered.length;
+    }
+
     res.json(result);
   } catch (error) {
     next(error);
