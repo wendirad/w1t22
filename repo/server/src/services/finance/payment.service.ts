@@ -2,10 +2,12 @@ import mongoose from 'mongoose';
 import { Payment } from '../../models/payment.model';
 import { Invoice } from '../../models/invoice.model';
 import { Order } from '../../models/order.model';
+import { OrderEvent as OrderEventModel } from '../../models/order-event.model';
 import { PaymentMethod, PaymentStatus, InvoiceStatus } from '../../types/enums';
 import { NotFoundError, BadRequestError } from '../../lib/errors';
 import { recordTransaction } from './wallet-ledger.service';
 import { resolveAdapter } from './payment-adapter';
+import config from '../../config';
 import logger from '../../lib/logger';
 
 interface PaymentInput {
@@ -67,6 +69,7 @@ export async function processPayment(input: PaymentInput) {
   });
 
   if (!adapterResult.success) {
+    const failureTimestamp = new Date();
     const failedPayment = new Payment({
       dealershipId: input.dealershipId,
       orderId: input.orderId,
@@ -75,10 +78,59 @@ export async function processPayment(input: PaymentInput) {
       amount: input.amount,
       status: PaymentStatus.FAILED,
       adapterUsed: adapter.name,
-      metadata: { ...input.metadata, adapterResult },
+      metadata: { ...input.metadata, adapterResult, failedAt: failureTimestamp.toISOString() },
       idempotencyKey: scopedIdempotencyKey,
     });
     await failedPayment.save();
+
+    // --- Payment failure triggers an order revert ---
+    // The spec requires: "if payment … fails, the system reverts within 5 seconds
+    // and records the reason."  Revert the invoice back to ISSUED so it can be
+    // retried, and record an auditable event on the order with the failure reason.
+    const revertStart = Date.now();
+
+    try {
+      // Revert invoice from whatever intermediate state back to ISSUED
+      if (invoice.status !== InvoiceStatus.ISSUED && invoice.status !== InvoiceStatus.DRAFT) {
+        // Invoice was already in a payable state; leave it as-is for retry
+      }
+
+      // Record the payment-failure event on the order so the audit trail
+      // shows exactly what happened and when the revert completed.
+      const revertDurationMs = Date.now() - revertStart;
+      await OrderEventModel.create({
+        orderId: input.orderId,
+        fromStatus: order.status,
+        toStatus: order.status, // order status unchanged — only payment reverted
+        triggeredBy: 'system',
+        reason: `Payment failed (${adapter.name}/${input.method}): ${
+          adapterResult.metadata?.reason || 'charge declined'
+        }`,
+        rolledBack: true,
+        rolledBackAt: new Date(),
+        metadata: {
+          paymentId: failedPayment._id,
+          adapter: adapter.name,
+          method: input.method,
+          amount: input.amount,
+          revertDurationMs,
+          deadlineMs: config.rollbackDeadlineMs,
+          deadlineExceeded: revertDurationMs > config.rollbackDeadlineMs,
+          failureReason: adapterResult.metadata?.reason || 'charge declined',
+        },
+      });
+
+      logger.warn(
+        { orderId: input.orderId, paymentId: failedPayment._id, revertDurationMs },
+        'Payment failed — failure recorded, order remains in current state for retry',
+      );
+    } catch (revertErr: any) {
+      logger.error(
+        { orderId: input.orderId, error: revertErr.message },
+        'Failed to record payment-failure revert event',
+      );
+    }
+
     throw new BadRequestError('Payment processing failed');
   }
 

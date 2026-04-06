@@ -10,7 +10,7 @@ export interface IAuditLog extends Document {
   action: string;
   resource: {
     type: string;
-    id: mongoose.Types.ObjectId;
+    id: string;
   };
   before: Record<string, any> | null;
   after: Record<string, any> | null;
@@ -28,7 +28,7 @@ const auditLogSchema = new Schema<IAuditLog>({
   action: { type: String, required: true },
   resource: {
     type: { type: String, required: true },
-    id: { type: Schema.Types.ObjectId, required: true },
+    id: { type: String, required: true },
   },
   before: { type: Schema.Types.Mixed, default: null },
   after: { type: Schema.Types.Mixed, default: null },

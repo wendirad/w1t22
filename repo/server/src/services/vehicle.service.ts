@@ -81,7 +81,11 @@ export async function listVehicles(
   }
   if (filters.region) query.region = new RegExp(filters.region, 'i');
 
-  const sort: any = { [pagination.sortBy]: pagination.sortOrder === 'asc' ? 1 : -1 };
+  // Append _id as a tiebreaker to guarantee stable ordering when multiple
+  // documents share the same value for the primary sort key (e.g. same price).
+  // Without this, MongoDB may return them in arbitrary order across pages,
+  // causing duplicates or skipped items in paginated results.
+  const sort: any = { [pagination.sortBy]: pagination.sortOrder === 'asc' ? 1 : -1, _id: 1 };
   const skip = (pagination.page - 1) * pagination.limit;
 
   const [data, total] = await Promise.all([

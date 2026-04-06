@@ -10,8 +10,11 @@ import { createOrderStateMachine } from './order-state-machine';
 import { NotFoundError, BadRequestError, ConflictError } from '../../lib/errors';
 import { PaginationParams, buildPaginatedResult } from '../../lib/pagination';
 import { refundPayment } from '../finance/payment.service';
+import config from '../../config';
 import logger from '../../lib/logger';
 import { v4 as uuidv4 } from 'uuid';
+
+const ROLLBACK_DEADLINE_MS = config.rollbackDeadlineMs;
 
 function generateOrderNumber(dealershipId: string): string {
   const prefix = dealershipId.slice(-4).toUpperCase();
@@ -48,6 +51,7 @@ export async function createOrderFromCart(
 
   const orders: IOrder[] = [];
   const session = await mongoose.startSession();
+  const reservationStartedAt = Date.now();
 
   try {
     await session.withTransaction(async () => {
@@ -122,6 +126,37 @@ export async function createOrderFromCart(
       cart.items = [];
       await cart.save({ session });
     });
+  } catch (error: any) {
+    const revertDurationMs = Date.now() - reservationStartedAt;
+    // The Mongo transaction aborted — all reservations are automatically rolled
+    // back by MongoDB.  Record the failure event so it is auditable.
+    logger.error(
+      { userId, dealershipId, error: error.message, revertDurationMs },
+      'Inventory reservation failed — transaction aborted, all changes rolled back',
+    );
+
+    // Persist a reservation-failure event outside the aborted transaction so
+    // the audit trail shows *what* failed and *when* the revert completed.
+    await OrderEventModel.create({
+      orderId: null as any,
+      fromStatus: null,
+      toStatus: 'reservation_failed',
+      triggeredBy: userId,
+      reason: `Inventory reservation failed: ${error.message}`,
+      rolledBack: true,
+      rolledBackAt: new Date(),
+      metadata: {
+        dealershipId,
+        revertDurationMs,
+        deadlineMs: ROLLBACK_DEADLINE_MS,
+        deadlineExceeded: revertDurationMs > ROLLBACK_DEADLINE_MS,
+        failureReason: error.message,
+      },
+    }).catch((logErr: any) => {
+      logger.error({ error: logErr.message }, 'Failed to record reservation failure event');
+    });
+
+    throw error;
   } finally {
     await session.endSession();
   }
@@ -147,9 +182,40 @@ interface SagaResult {
   rollbackStartedAt?: Date;
   rollbackCompletedAt?: Date;
   rollbackReason?: string;
-  durationMs?: number;
+  rollbackDurationMs?: number;
+  deadlineExceeded: boolean;
 }
 
+/**
+ * Wraps a promise with a hard timeout.  If the promise does not resolve within
+ * `ms` milliseconds the returned promise rejects with a timeout error while the
+ * original work continues in the background (we cannot forcibly abort DB I/O, but
+ * we can stop waiting for it).
+ */
+function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label}: exceeded ${ms}ms deadline`)),
+      ms,
+    );
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
+/**
+ * Execute a saga: run steps in order, compensate in reverse on failure.
+ *
+ * The 5-second rollback guarantee from the spec is enforced here:
+ * • Each individual compensation step is given a per-step share of the
+ *   remaining deadline.
+ * • The overall compensation phase is wrapped in a hard deadline so
+ *   the caller is never blocked longer than ROLLBACK_DEADLINE_MS.
+ * • The rollback event recorded in the database captures whether the
+ *   deadline was exceeded, so the condition is auditable.
+ */
 async function executeSaga(steps: SagaStep[], orderId: string): Promise<SagaResult> {
   const completed: SagaStep[] = [];
   const sagaStartedAt = Date.now();
@@ -159,30 +225,54 @@ async function executeSaga(steps: SagaStep[], orderId: string): Promise<SagaResu
       await step.execute();
       completed.push(step);
     } catch (error: any) {
+      // ---- compensation phase ----
       const rollbackStartedAt = new Date();
       const compensatedSteps: string[] = [];
+      let deadlineExceeded = false;
 
-      logger.error({ orderId, failedStep: step.name, error: error.message }, 'Saga step failed, compensating');
+      logger.error(
+        { orderId, failedStep: step.name, error: error.message },
+        'Saga step failed — starting compensation within rollback deadline',
+      );
 
-      // Compensate in reverse order
-      for (let i = completed.length - 1; i >= 0; i--) {
-        try {
-          await completed[i].compensate();
-          compensatedSteps.push(completed[i].name);
-          logger.info({ orderId, step: completed[i].name }, 'Compensation step succeeded');
-        } catch (compErr: any) {
-          logger.error({ orderId, step: completed[i].name, error: compErr.message }, 'Compensation step failed');
+      // Run all compensation steps under a single hard deadline
+      const compensateAll = async () => {
+        for (let i = completed.length - 1; i >= 0; i--) {
+          try {
+            await completed[i].compensate();
+            compensatedSteps.push(completed[i].name);
+            logger.info({ orderId, step: completed[i].name }, 'Compensation step succeeded');
+          } catch (compErr: any) {
+            logger.error(
+              { orderId, step: completed[i].name, error: compErr.message },
+              'Compensation step failed',
+            );
+          }
         }
+      };
+
+      try {
+        await withDeadline(
+          compensateAll(),
+          ROLLBACK_DEADLINE_MS,
+          `Rollback for order ${orderId}`,
+        );
+      } catch (deadlineErr: any) {
+        deadlineExceeded = true;
+        logger.error(
+          { orderId, elapsedMs: Date.now() - rollbackStartedAt.getTime(), compensatedSteps },
+          `Rollback deadline of ${ROLLBACK_DEADLINE_MS}ms exceeded — some steps may still be running`,
+        );
       }
 
       const rollbackCompletedAt = new Date();
-      const durationMs = rollbackCompletedAt.getTime() - rollbackStartedAt.getTime();
+      const rollbackDurationMs = rollbackCompletedAt.getTime() - rollbackStartedAt.getTime();
 
-      // Record rollback event for traceability
+      // Record an auditable rollback event
       await OrderEventModel.create({
         orderId,
         fromStatus: 'rollback',
-        toStatus: 'rollback_completed',
+        toStatus: deadlineExceeded ? 'rollback_deadline_exceeded' : 'rollback_completed',
         triggeredBy: 'system',
         reason: `Saga failed at step "${step.name}": ${error.message}`,
         rolledBack: true,
@@ -190,16 +280,26 @@ async function executeSaga(steps: SagaStep[], orderId: string): Promise<SagaResu
         metadata: {
           failedStep: step.name,
           compensatedSteps,
-          rollbackDurationMs: durationMs,
+          rollbackDurationMs,
           rollbackReason: error.message,
+          deadlineMs: ROLLBACK_DEADLINE_MS,
+          deadlineExceeded,
         },
       }).catch((logErr: any) => {
         logger.error({ orderId, error: logErr.message }, 'Failed to record rollback event');
       });
 
-      // Warn if rollback exceeded the 5-second boundary
-      if (durationMs > 5000) {
-        logger.warn({ orderId, durationMs }, 'Rollback exceeded 5-second boundary');
+      // If the rollback completed within the deadline, throw the original error
+      // so the caller knows the operation failed but state is consistent.
+      // If the deadline was exceeded, throw a distinct error that signals
+      // potential state inconsistency — this must not be silently swallowed.
+      if (deadlineExceeded) {
+        const slaError = new BadRequestError(
+          `Operation failed and rollback did not complete within ${ROLLBACK_DEADLINE_MS}ms. ` +
+          `Compensated: [${compensatedSteps.join(', ')}]. ` +
+          `Original failure: ${error.message}. Manual review required for order ${orderId}.`
+        );
+        throw slaError;
       }
 
       throw error;
@@ -209,7 +309,8 @@ async function executeSaga(steps: SagaStep[], orderId: string): Promise<SagaResu
   return {
     success: true,
     compensatedSteps: [],
-    durationMs: Date.now() - sagaStartedAt,
+    rollbackDurationMs: 0,
+    deadlineExceeded: false,
   };
 }
 
@@ -393,7 +494,7 @@ export async function listOrders(
   if (filters.buyerId) query.buyerId = filters.buyerId;
   if (filters.status) query.status = filters.status;
 
-  const sort: any = { [pagination.sortBy]: pagination.sortOrder === 'asc' ? 1 : -1 };
+  const sort: any = { [pagination.sortBy]: pagination.sortOrder === 'asc' ? 1 : -1, _id: 1 };
   const skip = (pagination.page - 1) * pagination.limit;
 
   const [data, total] = await Promise.all([

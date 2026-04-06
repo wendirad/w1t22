@@ -39,12 +39,23 @@ router.use('/admin', adminRoutes);
 router.use('/privacy', privacyRoutes);
 router.use('/audit', auditRoutes);
 
-// Experiment assignment endpoint — accessible to any authenticated user
+// Experiment assignment endpoint — accessible to any user (public or authenticated).
+// When the caller is authenticated, HMAC is enforced to maintain a consistent
+// request-signing policy across all authenticated routes.
+import { Request, Response, NextFunction } from 'express';
 import { optionalAuth } from '../middleware/auth';
+import { hmacVerify } from '../middleware/hmac-verify';
 import * as experimentService from '../services/experiment.service';
 import { Experiment } from '../models/experiment.model';
 
-router.get('/experiments/assignment', optionalAuth, async (req, res, next) => {
+function conditionalHmacVerify(req: Request, _res: Response, next: NextFunction) {
+  if (req.user) {
+    return hmacVerify(req, _res, next);
+  }
+  next();
+}
+
+router.get('/experiments/assignment', optionalAuth, conditionalHmacVerify, async (req, res, next) => {
   try {
     const feature = req.query.feature as string;
     if (!feature) {

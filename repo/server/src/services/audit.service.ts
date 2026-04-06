@@ -49,7 +49,7 @@ export async function getAuditLogs(
   if (filters.resourceId) query['resource.id'] = filters.resourceId;
   if (filters.action) query.action = new RegExp(filters.action, 'i');
 
-  const sort: any = { timestamp: -1 };
+  const sort: any = { timestamp: -1, _id: -1 };
   const skip = (pagination.page - 1) * pagination.limit;
 
   const [data, total] = await Promise.all([

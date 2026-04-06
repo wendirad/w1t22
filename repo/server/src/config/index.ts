@@ -25,6 +25,7 @@ const config = {
   cacheTtlSeconds: 600,
   trendingUpdateIntervalMinutes: 60,
   enableOnlinePayments: process.env.ENABLE_ONLINE_PAYMENTS === 'true',
+  rollbackDeadlineMs: parseInt(process.env.ROLLBACK_DEADLINE_MS || '5000', 10),
   logLevel: process.env.LOG_LEVEL || 'info',
   seed: {
     adminEmail: process.env.ADMIN_EMAIL || '',

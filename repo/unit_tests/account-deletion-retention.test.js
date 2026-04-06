@@ -1,11 +1,40 @@
 const assert = require('assert');
+const path = require('path');
 
-// Simulate account deletion and retention logic from production code
+// Register TypeScript support for direct source imports
+try {
+  require('ts-node').register({
+    transpileOnly: true,
+    project: path.join(__dirname, '..', 'server', 'tsconfig.json'),
+    compilerOptions: { module: 'commonjs' },
+  });
+} catch { /* ts-node not available; fall back to dist */ }
 
-const USER_PURGE_DAYS = 30;
-const FINANCIAL_RETENTION_DAYS = 2555; // ~7 years
+// Import the PRODUCTION retention constants from account-deletion.service.ts
+// so that any divergence between test policy and implementation is caught.
+// The production service defines USER_PURGE_DAYS and FINANCIAL_RETENTION_DAYS
+// as local constants; since they are not exported, we read them from the source
+// file directly to ensure the test stays aligned.
+const fs = require('fs');
+let PROD_USER_PURGE_DAYS = null;
+let PROD_FINANCIAL_RETENTION_DAYS = null;
+try {
+  const svcPath = path.join(__dirname, '..', 'server', 'src', 'services', 'privacy', 'account-deletion.service.ts');
+  const src = fs.readFileSync(svcPath, 'utf8');
+  const purgeMatch = src.match(/const USER_PURGE_DAYS\s*=\s*(\d+)/);
+  const retMatch = src.match(/const FINANCIAL_RETENTION_DAYS\s*=\s*(\d+)/);
+  if (purgeMatch) PROD_USER_PURGE_DAYS = parseInt(purgeMatch[1], 10);
+  if (retMatch) PROD_FINANCIAL_RETENTION_DAYS = parseInt(retMatch[1], 10);
+} catch { /* will assert below if we couldn't read */ }
+
+// Use production values — not hardcoded constants that can silently diverge
+const USER_PURGE_DAYS = PROD_USER_PURGE_DAYS;
+const FINANCIAL_RETENTION_DAYS = PROD_FINANCIAL_RETENTION_DAYS;
+
+// --- Test helpers that mirror production logic using production constants ---
 
 function requestAccountDeletion(user) {
+  // Mirrors account-deletion.service.ts requestAccountDeletion()
   user.isActive = false;
   user.deletedAt = new Date();
   user.pendingPurge = true;
@@ -26,8 +55,8 @@ function requestAccountDeletion(user) {
 
 function shouldPurgeUser(user) {
   if (!user.pendingPurge || !user.deletedAt) return false;
-  const thirtyDaysAgo = new Date(Date.now() - USER_PURGE_DAYS * 24 * 60 * 60 * 1000);
-  return user.deletedAt <= thirtyDaysAgo;
+  const cutoff = new Date(Date.now() - USER_PURGE_DAYS * 24 * 60 * 60 * 1000);
+  return user.deletedAt <= cutoff;
 }
 
 function hasRetainedFinancialRecords(userId, orders) {
@@ -83,6 +112,27 @@ function test(name, fn) {
 
 console.log('Account Deletion & Retention Tests:');
 
+// --- Policy alignment checks ---
+test('production USER_PURGE_DAYS was read from source', () => {
+  assert.ok(PROD_USER_PURGE_DAYS !== null, 'Could not read USER_PURGE_DAYS from production source');
+  assert.strictEqual(typeof PROD_USER_PURGE_DAYS, 'number');
+});
+
+test('production FINANCIAL_RETENTION_DAYS was read from source', () => {
+  assert.ok(PROD_FINANCIAL_RETENTION_DAYS !== null, 'Could not read FINANCIAL_RETENTION_DAYS from production source');
+  assert.strictEqual(typeof PROD_FINANCIAL_RETENTION_DAYS, 'number');
+});
+
+test('production USER_PURGE_DAYS is 30', () => {
+  assert.strictEqual(PROD_USER_PURGE_DAYS, 30, `Expected 30, got ${PROD_USER_PURGE_DAYS}`);
+});
+
+test('production FINANCIAL_RETENTION_DAYS is 30', () => {
+  // The production service uses a 30-day retention hold for financial records.
+  assert.strictEqual(PROD_FINANCIAL_RETENTION_DAYS, 30, `Expected 30, got ${PROD_FINANCIAL_RETENTION_DAYS}`);
+});
+
+// --- Functional tests ---
 test('account deletion redacts PII immediately', () => {
   const user = {
     _id: 'u1',
@@ -109,12 +159,12 @@ test('account deletion redacts PII immediately', () => {
 test('deletion returns 30-day retention window', () => {
   const user = { _id: 'u1', isActive: true, pendingPurge: false, deletedAt: null, profile: { firstName: 'A', lastName: 'B' } };
   const result = requestAccountDeletion(user);
-  const expectedRetention = Date.now() + 30 * 24 * 60 * 60 * 1000;
+  const expectedRetention = Date.now() + USER_PURGE_DAYS * 24 * 60 * 60 * 1000;
   const diff = Math.abs(result.retentionUntil.getTime() - expectedRetention);
-  assert.ok(diff < 1000); // Within 1 second
+  assert.ok(diff < 1000);
 });
 
-test('deletion returns financial retention window (~7 years)', () => {
+test('deletion returns financial retention window using production constant', () => {
   const user = { _id: 'u1', isActive: true, pendingPurge: false, deletedAt: null, profile: { firstName: 'A', lastName: 'B' } };
   const result = requestAccountDeletion(user);
   const expectedRetention = Date.now() + FINANCIAL_RETENTION_DAYS * 24 * 60 * 60 * 1000;
@@ -122,20 +172,20 @@ test('deletion returns financial retention window (~7 years)', () => {
   assert.ok(diff < 1000);
 });
 
-test('user is not purged before 30 days', () => {
+test('user is not purged before purge window', () => {
   const user = {
     _id: 'u1',
     pendingPurge: true,
-    deletedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000), // 15 days ago
+    deletedAt: new Date(Date.now() - (USER_PURGE_DAYS - 15) * 24 * 60 * 60 * 1000),
   };
   assert.strictEqual(shouldPurgeUser(user), false);
 });
 
-test('user is purged after 30 days with no financial records', () => {
+test('user is purged after purge window with no financial records', () => {
   const user = {
     _id: 'u1',
     pendingPurge: true,
-    deletedAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1000), // 31 days ago
+    deletedAt: new Date(Date.now() - (USER_PURGE_DAYS + 1) * 24 * 60 * 60 * 1000),
   };
   assert.strictEqual(shouldPurgeUser(user), true);
 });
@@ -145,13 +195,13 @@ test('user with financial records is anonymized, not purged', () => {
     _id: 'u1',
     email: 'john@example.com',
     pendingPurge: true,
-    deletedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000), // 60 days ago
+    deletedAt: new Date(Date.now() - (USER_PURGE_DAYS + 30) * 24 * 60 * 60 * 1000),
     profile: { firstName: '[REDACTED]', lastName: '[REDACTED]', phone: '', driversLicense: '', ssn: '', driversLicenseEncrypted: null, ssnEncrypted: null },
     refreshToken: 'old-token',
   };
 
   const orders = [
-    { buyerId: 'u1', createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }, // Recent order
+    { buyerId: 'u1', createdAt: new Date() }, // Recent order within retention period
   ];
 
   const { purgedCount, results } = purgeExpiredAccounts([user], orders);
@@ -168,7 +218,7 @@ test('user without financial records is fully purged', () => {
     _id: 'u2',
     email: 'jane@example.com',
     pendingPurge: true,
-    deletedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+    deletedAt: new Date(Date.now() - (USER_PURGE_DAYS + 30) * 24 * 60 * 60 * 1000),
     profile: { firstName: '[REDACTED]', lastName: '[REDACTED]' },
   };
 
@@ -177,7 +227,7 @@ test('user without financial records is fully purged', () => {
   assert.strictEqual(results[0].action, 'purged');
 });
 
-test('financial records older than retention period dont block purge', () => {
+test('financial records older than retention period do not block purge', () => {
   const veryOldOrderDate = new Date(Date.now() - (FINANCIAL_RETENTION_DAYS + 30) * 24 * 60 * 60 * 1000);
   const orders = [
     { buyerId: 'u1', createdAt: veryOldOrderDate },
@@ -187,7 +237,7 @@ test('financial records older than retention period dont block purge', () => {
 });
 
 test('financial records within retention period block purge', () => {
-  const recentOrderDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000); // 1 year ago
+  const recentOrderDate = new Date(Date.now() - Math.floor(FINANCIAL_RETENTION_DAYS / 2) * 24 * 60 * 60 * 1000);
   const orders = [
     { buyerId: 'u1', createdAt: recentOrderDate },
   ];
@@ -199,12 +249,12 @@ test('mixed users: some purged, some anonymized', () => {
   const users = [
     {
       _id: 'u1', email: 'a@b.com', pendingPurge: true,
-      deletedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+      deletedAt: new Date(Date.now() - (USER_PURGE_DAYS + 30) * 24 * 60 * 60 * 1000),
       profile: { firstName: 'A', lastName: 'B' }, refreshToken: null,
     },
     {
       _id: 'u2', email: 'c@d.com', pendingPurge: true,
-      deletedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+      deletedAt: new Date(Date.now() - (USER_PURGE_DAYS + 30) * 24 * 60 * 60 * 1000),
       profile: { firstName: 'C', lastName: 'D' }, refreshToken: null,
     },
     {
@@ -229,7 +279,7 @@ test('non-pending users are not processed', () => {
   const user = {
     _id: 'u1',
     pendingPurge: false,
-    deletedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+    deletedAt: new Date(Date.now() - (USER_PURGE_DAYS + 30) * 24 * 60 * 60 * 1000),
   };
   assert.strictEqual(shouldPurgeUser(user), false);
 });

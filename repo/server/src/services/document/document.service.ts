@@ -151,7 +151,7 @@ export async function listDocuments(
   if (filters.type) query.type = filters.type;
   if (filters.sensitiveFlag !== undefined) query.sensitiveFlag = filters.sensitiveFlag;
 
-  const sort: any = { [pagination.sortBy]: pagination.sortOrder === 'asc' ? 1 : -1 };
+  const sort: any = { [pagination.sortBy]: pagination.sortOrder === 'asc' ? 1 : -1, _id: 1 };
   const skip = (pagination.page - 1) * pagination.limit;
 
   const [data, total] = await Promise.all([
