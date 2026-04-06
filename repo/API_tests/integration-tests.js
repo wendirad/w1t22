@@ -514,6 +514,69 @@ async function runTests() {
     });
   }
 
+  // ===== Concurrent Transition Idempotency =====
+  console.log('--- Concurrent Transition Idempotency ---');
+
+  // Create a fresh order for the concurrency test
+  let concurrencyOrderId = '';
+  {
+    const cartRes = await request('GET', '/api/v1/cart', null, buyerToken);
+    if (cartRes.status === 200 && cartRes.data.items) {
+      for (const item of cartRes.data.items) {
+        const vid = typeof item.vehicleId === 'object' ? item.vehicleId._id : item.vehicleId;
+        await request('DELETE', `/api/v1/cart/items/${vid}`, null, buyerToken);
+      }
+    }
+    const avail = await request('GET', `/api/v1/vehicles?dealershipId=${testDealershipId}&status=available&limit=1`, null, buyerToken);
+    if (avail.status === 200 && avail.data.data && avail.data.data.length > 0) {
+      await request('POST', '/api/v1/cart/items', { vehicleId: avail.data.data[0]._id }, buyerToken);
+      const orderRes = await request('POST', '/api/v1/orders', {
+        idempotencyKey: `conc-order-${Date.now()}`,
+      }, buyerToken);
+      if (orderRes.status === 201) {
+        concurrencyOrderId = Array.isArray(orderRes.data) ? orderRes.data[0]._id : orderRes.data._id;
+      }
+    }
+  }
+
+  if (concurrencyOrderId) {
+    await test('parallel RESERVE transitions with same idempotencyKey produce exactly one event', async () => {
+      const idemKey = `conc-reserve-${Date.now()}`;
+
+      // Fire two identical RESERVE requests in parallel with the same idempotency key
+      const [res1, res2] = await Promise.all([
+        request('POST', `/api/v1/orders/${concurrencyOrderId}/transition`, {
+          event: 'RESERVE', reason: 'Concurrent test A', idempotencyKey: idemKey,
+        }, staffToken),
+        request('POST', `/api/v1/orders/${concurrencyOrderId}/transition`, {
+          event: 'RESERVE', reason: 'Concurrent test B', idempotencyKey: idemKey,
+        }, staffToken),
+      ]);
+
+      // Both should succeed (one executes, the other gets idempotent return)
+      assert(res1.status === 200, `Request 1: expected 200, got ${res1.status}`);
+      assert(res2.status === 200, `Request 2: expected 200, got ${res2.status}`);
+
+      // The order should be in 'reserved' state
+      const orderRes = await request('GET', `/api/v1/orders/${concurrencyOrderId}`, null, staffToken);
+      assert(orderRes.status === 200, `Expected 200, got ${orderRes.status}`);
+      assert(orderRes.data.status === 'reserved', `Expected reserved, got ${orderRes.data.status}`);
+
+      // There should be exactly ONE reserve event with this idempotency key
+      const eventsRes = await request('GET', `/api/v1/orders/${concurrencyOrderId}/events`, null, staffToken);
+      assert(eventsRes.status === 200, `Expected 200 for events, got ${eventsRes.status}`);
+      const reserveEvents = eventsRes.data.filter(
+        (e) => e.toStatus === 'reserved' && e.metadata && e.metadata.idempotencyKey === idemKey
+      );
+      assert(reserveEvents.length === 1, `Expected exactly 1 reserve event, got ${reserveEvents.length}`);
+    });
+
+    // Clean up: cancel the concurrency test order to release the vehicle
+    await request('POST', `/api/v1/orders/${concurrencyOrderId}/transition`, {
+      event: 'CANCEL', reason: 'Cleanup after concurrency test', idempotencyKey: `conc-cleanup-${Date.now()}`,
+    }, staffToken);
+  }
+
   // ===== Permission Override Management =====
   console.log('--- Permission Overrides ---');
   let testOverrideId = '';

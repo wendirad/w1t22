@@ -10,6 +10,7 @@ import { createOrderStateMachine } from './order-state-machine';
 import { NotFoundError, BadRequestError, ConflictError } from '../../lib/errors';
 import { PaginationParams, buildPaginatedResult } from '../../lib/pagination';
 import { refundPayment } from '../finance/payment.service';
+import { getRedisClient } from '../../config/redis';
 import config from '../../config';
 import logger from '../../lib/logger';
 import { v4 as uuidv4 } from 'uuid';
@@ -333,14 +334,54 @@ export async function transitionOrder(
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError('Order not found');
 
-  // Idempotency: if this exact transition was already applied, return the
-  // current order state instead of attempting a duplicate transition.
+  // --- Idempotency: acquire exclusive lock BEFORE any side effects ---
+  // 1. Fast path: check if this transition was already recorded.
+  // 2. Lock path: acquire a Redis lock so only one concurrent request proceeds
+  //    to execute the saga.  The second request waits briefly, then returns the
+  //    already-transitioned order.
+  // 3. DB safety net: the unique partial index on OrderEvent catches any race
+  //    that slips past the lock (e.g. Redis unavailable).
+  let lockAcquired = false;
+  const lockKey = idempotencyKey ? `txlock:${orderId}:${idempotencyKey}` : '';
+  // Unique token so only the request that acquired the lock can release it.
+  const lockToken = idempotencyKey ? uuidv4() : '';
+
   if (idempotencyKey) {
+    // Fast path — already completed
     const existingEvent = await OrderEventModel.findOne({
       orderId: order._id,
       'metadata.idempotencyKey': idempotencyKey,
     });
     if (existingEvent) {
+      return order;
+    }
+
+    // Acquire exclusive lock with an ownership token.
+    // SET key token EX 30 NX — only succeeds if no key exists.
+    const redis = getRedisClient();
+    const acquired = await redis.set(lockKey, lockToken, 'EX', 30, 'NX');
+    if (!acquired) {
+      // Another request holds the lock — wait briefly for it to finish, then
+      // return the current order state (which will reflect the other request's
+      // transition once it commits).
+      await new Promise((r) => setTimeout(r, 500));
+      const freshOrder = await Order.findById(orderId);
+      return freshOrder || order;
+    }
+    lockAcquired = true;
+
+    // Re-check after acquiring lock (the other request may have finished
+    // between our first check and the lock acquisition)
+    const doubleCheck = await OrderEventModel.findOne({
+      orderId: order._id,
+      'metadata.idempotencyKey': idempotencyKey,
+    });
+    if (doubleCheck) {
+      // Release using compare-and-delete so we only remove our own lock
+      await redis.eval(
+        "if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end",
+        1, lockKey, lockToken,
+      ).catch(() => {});
       return order;
     }
   }
@@ -483,19 +524,40 @@ export async function transitionOrder(
     });
   }
 
-  await executeSaga(sagaSteps, orderId);
+  try {
+    await executeSaga(sagaSteps, orderId);
 
-  await OrderEventModel.create({
-    orderId: order._id,
-    fromStatus: from,
-    toStatus: to,
-    triggeredBy: userId,
-    reason,
-    metadata: idempotencyKey ? { idempotencyKey } : {},
-  });
+    try {
+      await OrderEventModel.create({
+        orderId: order._id,
+        fromStatus: from,
+        toStatus: to,
+        triggeredBy: userId,
+        reason,
+        metadata: idempotencyKey ? { idempotencyKey } : {},
+      });
+    } catch (eventErr: any) {
+      // Duplicate key on (orderId, metadata.idempotencyKey) means a concurrent
+      // request already recorded this transition — treat as idempotent success.
+      if (eventErr.code === 11000 && idempotencyKey) {
+        const current = await Order.findById(orderId);
+        return current || order;
+      }
+      throw eventErr;
+    }
 
-  logger.info({ orderId, from, to, event, userId }, 'Order transitioned');
-  return order;
+    logger.info({ orderId, from, to, event, userId }, 'Order transitioned');
+    return order;
+  } finally {
+    // Release the idempotency lock only if we still own it (compare-and-delete).
+    // This prevents a request that outlived its TTL from deleting a newer owner's lock.
+    if (lockAcquired && lockKey) {
+      getRedisClient().eval(
+        "if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end",
+        1, lockKey, lockToken,
+      ).catch(() => {});
+    }
+  }
 }
 
 export async function getOrder(orderId: string) {

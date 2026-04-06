@@ -49,7 +49,7 @@ export async function uploadDocument(req: Request, res: Response, next: NextFunc
       action: 'document.upload',
       resourceType: 'document',
       resourceId: doc._id?.toString() || '',
-      after: { filename: doc.originalFilename, type: doc.type, sensitiveFlag: doc.sensitiveFlag, quarantined: doc.quarantined },
+      after: { documentId: doc._id?.toString(), type: doc.type, sensitiveFlag: doc.sensitiveFlag, quarantined: doc.quarantined },
       requestId: (req as any).requestId,
     });
 
@@ -168,7 +168,7 @@ export async function deleteDocument(req: Request, res: Response, next: NextFunc
       action: 'document.delete',
       resourceType: 'document',
       resourceId: req.params.id,
-      before: { filename: doc.originalFilename, type: doc.type },
+      before: { documentId: req.params.id, type: doc.type },
       requestId: (req as any).requestId,
     });
     res.json({ msg: 'Document deleted' });

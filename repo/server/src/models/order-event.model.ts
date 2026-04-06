@@ -33,5 +33,13 @@ const orderEventSchema = new Schema<IOrderEvent>({
 
 orderEventSchema.index({ orderId: 1, timestamp: 1 });
 orderEventSchema.index({ actorType: 1, timestamp: -1 });
+// Enforce transition idempotency at the database level.  Two concurrent requests
+// with the same (orderId, metadata.idempotencyKey) will race through the
+// application-level check-then-act, but the second insert hits this unique
+// constraint and is treated as the idempotent return path.
+orderEventSchema.index(
+  { orderId: 1, 'metadata.idempotencyKey': 1 },
+  { unique: true, partialFilterExpression: { 'metadata.idempotencyKey': { $exists: true } } }
+);
 
 export const OrderEvent = mongoose.model<IOrderEvent>('OrderEvent', orderEventSchema);
