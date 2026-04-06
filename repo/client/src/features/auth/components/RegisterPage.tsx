@@ -86,8 +86,13 @@ export default function RegisterPage() {
               onChange={(e) => setForm({ ...form, password: e.target.value })}
               className="input-field"
               required
-              minLength={6}
+              minLength={8}
+              pattern=".{8,}"
+              title="Password must be at least 8 characters"
             />
+            {form.password.length > 0 && form.password.length < 8 && (
+              <p className="text-xs text-red-500 mt-1">Password must be at least 8 characters</p>
+            )}
           </div>
 
           <div>

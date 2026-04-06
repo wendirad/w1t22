@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../../features/auth/context/AuthContext';
 import { useCartContext } from '../../../features/cart/context/CartContext';
@@ -18,14 +19,37 @@ export default function AppShell() {
   const { itemCount } = useCartContext();
   const location = useLocation();
   const navigate = useNavigate();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const filteredNav = NAV_ITEMS.filter(
     (item) => !item.roles || item.roles.includes(user?.role as Role)
   );
 
   return (
-    <div className="min-h-screen flex">
-      <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
+    <div className="min-h-screen flex flex-col md:flex-row">
+      {/* Mobile header */}
+      <div className="md:hidden flex items-center justify-between bg-white border-b border-gray-200 px-4 py-3">
+        <Link to="/" className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+            <span className="text-white font-bold text-sm">ML</span>
+          </div>
+          <span className="font-bold text-lg text-gray-900">MotorLot</span>
+        </Link>
+        <button
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+        >
+          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            {mobileMenuOpen
+              ? <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              : <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+            }
+          </svg>
+        </button>
+      </div>
+
+      {/* Sidebar: hidden on mobile, visible on md+ */}
+      <aside className={`${mobileMenuOpen ? 'block' : 'hidden'} md:block w-full md:w-64 bg-white border-r border-gray-200 flex-col md:flex`}>
         <div className="p-4 border-b border-gray-200">
           <Link to="/" className="flex items-center gap-2">
             <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
@@ -42,6 +66,7 @@ export default function AppShell() {
               <Link
                 key={item.path}
                 to={item.path}
+                onClick={() => setMobileMenuOpen(false)}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive
                     ? 'bg-primary-50 text-primary-700'

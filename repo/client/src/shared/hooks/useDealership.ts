@@ -5,7 +5,19 @@ import httpClient from '../api/httpClient';
 export function useDealership() {
   const { user } = useAuth();
   const [dealerships, setDealerships] = useState<Array<{ _id: string; name: string }>>([]);
-  const [selectedDealershipId, setSelectedDealershipId] = useState<string>('');
+  const [selectedDealershipId, setSelectedDealershipIdState] = useState<string>(
+    () => localStorage.getItem('selectedDealershipId') || ''
+  );
+
+  // Persist selection to localStorage so httpClient can inject X-Dealership-Id header
+  const setSelectedDealershipId = (id: string) => {
+    setSelectedDealershipIdState(id);
+    if (id) {
+      localStorage.setItem('selectedDealershipId', id);
+    } else {
+      localStorage.removeItem('selectedDealershipId');
+    }
+  };
   const [loading, setLoading] = useState(false);
 
   const isAdmin = user?.role === 'admin';

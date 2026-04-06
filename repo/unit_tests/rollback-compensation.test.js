@@ -1,6 +1,20 @@
 const assert = require('assert');
-const { StateMachine } = require('../server/dist/lib/state-machine');
-const { orderStateMachineDefinition } = require('../server/dist/services/order/order-state-machine');
+const path = require('path');
+
+// Register TypeScript support for direct source imports (no build step required)
+try {
+  require('ts-node').register({
+    transpileOnly: true,
+    project: path.join(__dirname, '..', 'server', 'tsconfig.json'),
+    compilerOptions: { module: 'commonjs' },
+  });
+} catch { /* ts-node not available; fall back to dist */ }
+
+let smModule, osmModule;
+try { smModule = require('../server/src/lib/state-machine'); } catch { smModule = require('../server/dist/lib/state-machine'); }
+try { osmModule = require('../server/src/services/order/order-state-machine'); } catch { osmModule = require('../server/dist/services/order/order-state-machine'); }
+const { StateMachine } = smModule;
+const { orderStateMachineDefinition } = osmModule;
 
 // Uses production state machine for FSM validation + tests the compensation pattern
 // used by order.service.ts executeSaga()

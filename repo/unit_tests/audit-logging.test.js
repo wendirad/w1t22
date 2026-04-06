@@ -1,5 +1,18 @@
 const assert = require('assert');
-const { sanitizeForAudit } = require('../server/src/lib/logger');
+const path = require('path');
+
+// Register TypeScript support for direct source imports (no build step required)
+try {
+  require('ts-node').register({
+    transpileOnly: true,
+    project: path.join(__dirname, '..', 'server', 'tsconfig.json'),
+    compilerOptions: { module: 'commonjs' },
+  });
+} catch { /* ts-node not available; fall back to dist */ }
+
+let loggerModule;
+try { loggerModule = require('../server/src/lib/logger'); } catch { loggerModule = require('../server/dist/lib/logger'); }
+const { sanitizeForAudit } = loggerModule;
 
 let passed = 0;
 let failed = 0;

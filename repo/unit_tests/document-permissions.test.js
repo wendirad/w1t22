@@ -1,7 +1,19 @@
 const assert = require('assert');
+const path = require('path');
 
-// Import production enums and constants used by permission.service.ts
-const { Role, PermissionEffect } = require('../server/dist/types/enums');
+// Register TypeScript support for direct source imports (no build step required)
+try {
+  require('ts-node').register({
+    transpileOnly: true,
+    project: path.join(__dirname, '..', 'server', 'tsconfig.json'),
+    compilerOptions: { module: 'commonjs' },
+  });
+} catch { /* ts-node not available; fall back to dist */ }
+
+// Import production enums — prefer source, fall back to dist
+let enums;
+try { enums = require('../server/src/types/enums'); } catch { enums = require('../server/dist/types/enums'); }
+const { Role, PermissionEffect } = enums;
 
 // Mirror the exact DEFAULT_PERMISSIONS from production permission.service.ts
 // This must match server/src/services/permission.service.ts lines 5-18

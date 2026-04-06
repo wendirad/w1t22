@@ -57,8 +57,9 @@ export const addToCartSchema = z.object({
 });
 
 // Orders — dealershipId derived from auth context, not accepted from client
+// idempotencyKey is mandatory for all state-changing operations to ensure deterministic behavior
 export const createOrderSchema = z.object({
-  idempotencyKey: z.string().optional(),
+  idempotencyKey: z.string().min(1, 'idempotencyKey is required for order creation'),
 });
 
 export const transitionOrderSchema = z.object({
@@ -86,12 +87,13 @@ export const documentActionSchema = z.object({
 });
 
 // Finance — dealershipId derived from auth context, not accepted from client
+// idempotencyKey is mandatory for payment operations to prevent duplicate charges
 export const processPaymentSchema = z.object({
   orderId: z.string().min(1),
   invoiceId: z.string().min(1),
   method: z.enum(['cash', 'cashier_check', 'in_house_financing', 'credit_card', 'bank_transfer']),
   amount: z.number().positive(),
-  idempotencyKey: z.string().optional(),
+  idempotencyKey: z.string().min(1, 'idempotencyKey is required for payment processing'),
   metadata: z.record(z.any()).optional(),
 });
 

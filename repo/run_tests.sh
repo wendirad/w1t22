@@ -18,6 +18,9 @@ UNIT_FAILED=0
 API_PASSED=0
 API_FAILED=0
 
+# Make ts-node available for unit tests that import TypeScript source
+export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$(pwd)/server/node_modules"
+
 # --- Unit Tests ---
 echo "Running Unit Tests..."
 echo "----------------------------------------"

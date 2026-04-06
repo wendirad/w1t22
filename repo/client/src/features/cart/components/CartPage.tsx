@@ -16,6 +16,16 @@ export default function CartPage() {
   const queryClient = useQueryClient();
   const [checkoutError, setCheckoutError] = useState('');
 
+  // A/B experiment assignment for checkout steps
+  const { data: checkoutExperiment } = useQuery({
+    queryKey: ['experiment', 'checkout_steps'],
+    queryFn: () => httpClient.get('/experiments/assignment?feature=checkout_steps').then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const checkoutVariant = checkoutExperiment?.variant || 'control';
+  const checkoutConfig = checkoutExperiment?.config || {};
+
   const { data: cart, isLoading, error, refetch } = useQuery({
     queryKey: ['cart', dealershipId],
     queryFn: () => httpClient.get(`/cart?dealershipId=${dealershipId}`).then((r) => r.data),
@@ -75,8 +85,8 @@ export default function CartPage() {
           <button onClick={() => navigate('/vehicles')} className="btn-primary">Browse Vehicles</button>
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-6">
-          <div className="col-span-2 space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-4">
             {items.map((item: any) => {
               const vehicle = item.vehicleId;
               if (!vehicle) return null;
@@ -147,8 +157,13 @@ export default function CartPage() {
               className="btn-primary w-full mt-4 flex items-center justify-center gap-2"
             >
               {checkout.isPending && <Spinner size="sm" />}
-              {checkout.isPending ? 'Processing...' : 'Proceed to Checkout'}
+              {checkout.isPending ? 'Processing...' : (checkoutConfig.buttonLabel || 'Proceed to Checkout')}
             </button>
+            {checkoutVariant !== 'control' && checkoutConfig.showSummaryBelow && (
+              <div className="mt-3 text-xs text-gray-500 bg-gray-50 p-2 rounded">
+                Review your items above before completing the purchase.
+              </div>
+            )}
             <p className="text-xs text-gray-400 mt-2 text-center">
               Orders may split based on supplier/warehouse
             </p>

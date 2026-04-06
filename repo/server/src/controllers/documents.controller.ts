@@ -214,6 +214,11 @@ export async function editDocument(req: Request, res: Response, next: NextFuncti
   }
 }
 
+// Safe actions that can be delegated through sharing — higher-privilege actions
+// (approve, delete, share) require explicit admin override
+const SAFE_SHARE_ACTIONS = new Set(['read', 'download']);
+const ADMIN_SHARE_ACTIONS = new Set(['read', 'download', 'write', 'delete', 'share', 'submit', 'approve']);
+
 export async function shareDocument(req: Request, res: Response, next: NextFunction) {
   try {
     const doc = await documentService.getDocument(req.params.id);
@@ -240,9 +245,36 @@ export async function shareDocument(req: Request, res: Response, next: NextFunct
       throw new ForbiddenError('Cannot share document with user from a different dealership');
     }
 
+    const requestedActions: string[] = req.body.actions || ['read', 'download'];
+
+    // Enforce sharing constraints: non-admin users can only share safe actions
+    const allowedActions = req.user!.role === 'admin' ? ADMIN_SHARE_ACTIONS : SAFE_SHARE_ACTIONS;
+    const invalidActions = requestedActions.filter((a) => !allowedActions.has(a));
+    if (invalidActions.length > 0) {
+      throw new ForbiddenError(
+        `Cannot share actions [${invalidActions.join(', ')}] — only [${[...allowedActions].join(', ')}] can be delegated`
+      );
+    }
+
+    // Ensure the sharer cannot grant permissions they don't themselves have
+    for (const action of requestedActions) {
+      const sharerHasAction = await checkPermission(
+        req.user!.id,
+        req.user!.role,
+        dealershipId,
+        'document',
+        doc._id.toString(),
+        action,
+        doc.sensitiveFlag
+      );
+      if (!sharerHasAction) {
+        throw new ForbiddenError(`Cannot share "${action}" permission — you do not have it yourself`);
+      }
+    }
+
     const updated = await documentService.shareDocument(req.params.id, {
       targetUserId: req.body.targetUserId,
-      actions: req.body.actions || ['read', 'download'],
+      actions: requestedActions,
     });
 
     await logAuditEvent({
@@ -253,7 +285,7 @@ export async function shareDocument(req: Request, res: Response, next: NextFunct
       action: 'document.share',
       resourceType: 'document',
       resourceId: req.params.id,
-      after: { sharedWith: req.body.targetUserId, actions: req.body.actions },
+      after: { sharedWith: req.body.targetUserId, actions: requestedActions },
       requestId: (req as any).requestId,
     });
 

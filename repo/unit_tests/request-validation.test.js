@@ -1,4 +1,17 @@
 const assert = require('assert');
+const path = require('path');
+
+// Register TypeScript support for direct source imports (no build step required)
+try {
+  require('ts-node').register({
+    transpileOnly: true,
+    project: path.join(__dirname, '..', 'server', 'tsconfig.json'),
+    compilerOptions: { module: 'commonjs' },
+  });
+} catch { /* ts-node not available; fall back to dist */ }
+
+let validationModule;
+try { validationModule = require('../server/src/lib/validation-schemas'); } catch { validationModule = require('../server/dist/lib/validation-schemas'); }
 const {
   registerSchema,
   loginSchema,
@@ -10,7 +23,7 @@ const {
   mongoIdParam,
   mergeOrdersSchema,
   addToCartSchema,
-} = require('../server/src/lib/validation-schemas');
+} = validationModule;
 
 let passed = 0;
 let failed = 0;
@@ -108,12 +121,16 @@ test('processPayment: negative amount is rejected', () => {
 });
 
 test('processPayment: valid offline payment passes', () => {
-  expectPass(processPaymentSchema, { orderId: 'abc', invoiceId: 'def', method: 'cash', amount: 25000 });
+  expectPass(processPaymentSchema, { orderId: 'abc', invoiceId: 'def', method: 'cash', amount: 25000, idempotencyKey: 'pay-123' });
 });
 
 test('processPayment: online methods accepted at schema level (runtime gated)', () => {
   // Schema allows online methods; runtime adapter check enforces the flag
-  expectPass(processPaymentSchema, { orderId: 'abc', invoiceId: 'def', method: 'credit_card', amount: 25000 });
+  expectPass(processPaymentSchema, { orderId: 'abc', invoiceId: 'def', method: 'credit_card', amount: 25000, idempotencyKey: 'pay-456' });
+});
+
+test('processPayment: missing idempotencyKey is rejected', () => {
+  expectFail(processPaymentSchema, { orderId: 'abc', invoiceId: 'def', method: 'cash', amount: 25000 });
 });
 
 // Cart

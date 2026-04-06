@@ -22,7 +22,9 @@ export async function processPayment(input: PaymentInput) {
   // Validate payment method before any DB operations
   const adapter = resolveAdapter(input.method);
 
-  const existing = await Payment.findOne({ idempotencyKey: input.idempotencyKey });
+  // Scope idempotency by dealership to prevent cross-tenant collisions
+  const scopedIdempotencyKey = `${input.dealershipId}:${input.idempotencyKey}`;
+  const existing = await Payment.findOne({ idempotencyKey: scopedIdempotencyKey });
   if (existing) return existing;
 
   const invoice = await Invoice.findById(input.invoiceId);
@@ -74,7 +76,7 @@ export async function processPayment(input: PaymentInput) {
       status: PaymentStatus.FAILED,
       adapterUsed: adapter.name,
       metadata: { ...input.metadata, adapterResult },
-      idempotencyKey: input.idempotencyKey,
+      idempotencyKey: scopedIdempotencyKey,
     });
     await failedPayment.save();
     throw new BadRequestError('Payment processing failed');
@@ -94,7 +96,7 @@ export async function processPayment(input: PaymentInput) {
         status: PaymentStatus.COMPLETED,
         adapterUsed: adapter.name,
         metadata: { ...input.metadata, adapterTransactionId: adapterResult.transactionId, ...adapterResult.metadata },
-        idempotencyKey: input.idempotencyKey,
+        idempotencyKey: scopedIdempotencyKey,
       });
 
       await payment.save({ session });

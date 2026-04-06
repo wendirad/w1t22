@@ -24,7 +24,9 @@ export async function createOrderFromCart(
   dealershipId: string,
   idempotencyKey: string
 ) {
-  const existing = await Order.findOne({ idempotencyKey });
+  // Scope idempotency by user + dealership to prevent cross-tenant collisions
+  const scopedIdempotencyKey = `${userId}:${dealershipId}:${idempotencyKey}`;
+  const existing = await Order.findOne({ idempotencyKey: scopedIdempotencyKey });
   if (existing) return existing;
 
   const cart = await Cart.findOne({ userId, dealershipId }).populate('items.vehicleId');
@@ -76,7 +78,7 @@ export async function createOrderFromCart(
           });
         }
 
-        const orderKey = groups.size > 1 ? `${idempotencyKey}-${orders.length}` : idempotencyKey;
+        const orderKey = groups.size > 1 ? `${scopedIdempotencyKey}-${orders.length}` : scopedIdempotencyKey;
 
         const order = new Order({
           orderNumber: generateOrderNumber(dealershipId),
@@ -138,26 +140,77 @@ interface SagaStep {
   compensate: () => Promise<void>;
 }
 
-async function executeSaga(steps: SagaStep[], orderId: string) {
+interface SagaResult {
+  success: boolean;
+  failedStep?: string;
+  compensatedSteps: string[];
+  rollbackStartedAt?: Date;
+  rollbackCompletedAt?: Date;
+  rollbackReason?: string;
+  durationMs?: number;
+}
+
+async function executeSaga(steps: SagaStep[], orderId: string): Promise<SagaResult> {
   const completed: SagaStep[] = [];
+  const sagaStartedAt = Date.now();
+
   for (const step of steps) {
     try {
       await step.execute();
       completed.push(step);
     } catch (error: any) {
+      const rollbackStartedAt = new Date();
+      const compensatedSteps: string[] = [];
+
       logger.error({ orderId, failedStep: step.name, error: error.message }, 'Saga step failed, compensating');
+
       // Compensate in reverse order
       for (let i = completed.length - 1; i >= 0; i--) {
         try {
           await completed[i].compensate();
+          compensatedSteps.push(completed[i].name);
           logger.info({ orderId, step: completed[i].name }, 'Compensation step succeeded');
         } catch (compErr: any) {
           logger.error({ orderId, step: completed[i].name, error: compErr.message }, 'Compensation step failed');
         }
       }
+
+      const rollbackCompletedAt = new Date();
+      const durationMs = rollbackCompletedAt.getTime() - rollbackStartedAt.getTime();
+
+      // Record rollback event for traceability
+      await OrderEventModel.create({
+        orderId,
+        fromStatus: 'rollback',
+        toStatus: 'rollback_completed',
+        triggeredBy: 'system',
+        reason: `Saga failed at step "${step.name}": ${error.message}`,
+        rolledBack: true,
+        rolledBackAt: rollbackCompletedAt,
+        metadata: {
+          failedStep: step.name,
+          compensatedSteps,
+          rollbackDurationMs: durationMs,
+          rollbackReason: error.message,
+        },
+      }).catch((logErr: any) => {
+        logger.error({ orderId, error: logErr.message }, 'Failed to record rollback event');
+      });
+
+      // Warn if rollback exceeded the 5-second boundary
+      if (durationMs > 5000) {
+        logger.warn({ orderId, durationMs }, 'Rollback exceeded 5-second boundary');
+      }
+
       throw error;
     }
   }
+
+  return {
+    success: true,
+    compensatedSteps: [],
+    durationMs: Date.now() - sagaStartedAt,
+  };
 }
 
 export async function transitionOrder(
@@ -334,6 +387,8 @@ export async function listOrders(
   pagination: PaginationParams
 ) {
   const query: any = {};
+  // Dealership and buyer constraints are mandatory when provided — they are always
+  // derived from the authenticated user context by the controller, not from client input.
   if (filters.dealershipId) query.dealershipId = filters.dealershipId;
   if (filters.buyerId) query.buyerId = filters.buyerId;
   if (filters.status) query.status = filters.status;

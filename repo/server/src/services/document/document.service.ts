@@ -49,12 +49,22 @@ export async function uploadDocument(
 
   fs.writeFileSync(storagePath, file.buffer);
 
+  // For sensitive documents, encrypt metadata before persistence so that
+  // plaintext never reaches the database. Only non-sensitive fields (type, hash,
+  // size, mimeType) are stored in raw form for indexing.
+  let persistedFilename = file.originalname;
+  let persistedStoragePath = storagePath;
   let encryptedMetadata = null;
+
   if (metadata.sensitiveFlag) {
     encryptedMetadata = {
       originalFilename: await encryptValue(file.originalname),
       storagePath: await encryptValue(storagePath),
     };
+    // Replace plaintext with opaque placeholders — the real values are only
+    // in encryptedMetadata and can be decrypted on authorized read
+    persistedFilename = `[ENCRYPTED:${sha256Hash.slice(0, 8)}]`;
+    persistedStoragePath = `[ENCRYPTED:${sha256Hash.slice(0, 8)}]`;
   }
 
   const doc = new DocumentModel({
@@ -63,8 +73,8 @@ export async function uploadDocument(
     vehicleId: metadata.vehicleId || null,
     uploadedBy: metadata.uploadedBy,
     type: metadata.type,
-    originalFilename: file.originalname,
-    storagePath,
+    originalFilename: persistedFilename,
+    storagePath: persistedStoragePath,
     mimeType: file.mimetype,
     sizeBytes: file.size,
     sha256Hash,
@@ -95,11 +105,29 @@ export async function downloadDocument(documentId: string) {
   if (!doc) throw new NotFoundError('Document not found');
   if (doc.quarantined) throw new ForbiddenError('Document is quarantined');
 
-  if (!fs.existsSync(doc.storagePath)) {
+  // For sensitive documents, decrypt the real storage path and filename
+  let actualStoragePath = doc.storagePath;
+  let actualFilename = doc.originalFilename;
+
+  if (doc.sensitiveFlag && doc.encryptedMetadata) {
+    try {
+      if (doc.encryptedMetadata.storagePath) {
+        actualStoragePath = await decryptValue(doc.encryptedMetadata.storagePath);
+      }
+      if (doc.encryptedMetadata.originalFilename) {
+        actualFilename = await decryptValue(doc.encryptedMetadata.originalFilename);
+      }
+    } catch (err: any) {
+      logger.error({ documentId, error: err.message }, 'Failed to decrypt sensitive document metadata');
+      throw new ForbiddenError('Unable to access sensitive document');
+    }
+  }
+
+  if (!fs.existsSync(actualStoragePath)) {
     throw new NotFoundError('Document file not found on disk');
   }
 
-  const buffer = fs.readFileSync(doc.storagePath);
+  const buffer = fs.readFileSync(actualStoragePath);
   const currentHash = hashFile(buffer);
 
   if (currentHash !== doc.sha256Hash) {
@@ -109,7 +137,7 @@ export async function downloadDocument(documentId: string) {
     throw new ForbiddenError('Document integrity check failed - quarantined');
   }
 
-  return { buffer, mimeType: doc.mimeType, filename: doc.originalFilename };
+  return { buffer, mimeType: doc.mimeType, filename: actualFilename };
 }
 
 export async function listDocuments(
@@ -138,8 +166,16 @@ export async function deleteDocument(documentId: string, userId: string) {
   const doc = await DocumentModel.findById(documentId);
   if (!doc) throw new NotFoundError('Document not found');
 
-  if (fs.existsSync(doc.storagePath)) {
-    fs.unlinkSync(doc.storagePath);
+  // For sensitive documents, decrypt the real storage path
+  let actualStoragePath = doc.storagePath;
+  if (doc.sensitiveFlag && doc.encryptedMetadata?.storagePath) {
+    try {
+      actualStoragePath = await decryptValue(doc.encryptedMetadata.storagePath);
+    } catch { /* use stored path as fallback */ }
+  }
+
+  if (fs.existsSync(actualStoragePath)) {
+    fs.unlinkSync(actualStoragePath);
   }
 
   await DocumentModel.findByIdAndDelete(documentId);

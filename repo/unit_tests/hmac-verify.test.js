@@ -1,5 +1,18 @@
 const assert = require('assert');
-const { generateHmac, verifyHmac } = require('../server/dist/lib/crypto');
+const path = require('path');
+
+// Register TypeScript support for direct source imports (no build step required)
+try {
+  require('ts-node').register({
+    transpileOnly: true,
+    project: path.join(__dirname, '..', 'server', 'tsconfig.json'),
+    compilerOptions: { module: 'commonjs' },
+  });
+} catch { /* ts-node not available; fall back to dist */ }
+
+let cryptoModule;
+try { cryptoModule = require('../server/src/lib/crypto'); } catch { cryptoModule = require('../server/dist/lib/crypto'); }
+const { generateHmac, verifyHmac } = cryptoModule;
 
 const HMAC_SECRET = 'test-hmac-secret-key';
 const WINDOW_SECONDS = 300;

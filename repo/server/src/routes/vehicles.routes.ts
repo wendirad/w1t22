@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as vehiclesController from '../controllers/vehicles.controller';
+import { Request, Response, NextFunction } from 'express';
 import { authenticate, optionalAuth } from '../middleware/auth';
 import { hmacVerify } from '../middleware/hmac-verify';
 import { requireRole } from '../middleware/rbac';
@@ -12,10 +13,20 @@ import {
   mongoIdParam,
 } from '../lib/validation-schemas';
 
+// Enforce HMAC only for authenticated users — unauthenticated public access bypasses HMAC
+function conditionalHmacVerify(req: Request, res: Response, next: NextFunction) {
+  if (req.user) {
+    return hmacVerify(req, res, next);
+  }
+  next();
+}
+
 const router = Router();
 
-router.get('/', optionalAuth, dealershipScope, vehiclesController.listVehicles);
-router.get('/:id', optionalAuth, validate(mongoIdParam, 'params'), vehiclesController.getVehicle);
+// HMAC is verified conditionally: if the user is authenticated and has a signing key,
+// the signature is validated. Unauthenticated (public) access still works without HMAC.
+router.get('/', optionalAuth, conditionalHmacVerify, dealershipScope, vehiclesController.listVehicles);
+router.get('/:id', optionalAuth, conditionalHmacVerify, validate(mongoIdParam, 'params'), vehiclesController.getVehicle);
 router.post(
   '/',
   authenticate,

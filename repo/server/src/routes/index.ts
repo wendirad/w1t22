@@ -39,4 +39,30 @@ router.use('/admin', adminRoutes);
 router.use('/privacy', privacyRoutes);
 router.use('/audit', auditRoutes);
 
+// Experiment assignment endpoint — accessible to any authenticated user
+import { optionalAuth } from '../middleware/auth';
+import * as experimentService from '../services/experiment.service';
+import { Experiment } from '../models/experiment.model';
+
+router.get('/experiments/assignment', optionalAuth, async (req, res, next) => {
+  try {
+    const feature = req.query.feature as string;
+    if (!feature) {
+      res.json({ variant: 'control', config: {}, isDefault: true });
+      return;
+    }
+    const experiment = await Experiment.findOne({ feature, status: 'active' });
+    if (!experiment) {
+      res.json({ variant: 'control', config: {}, isDefault: true });
+      return;
+    }
+    const userId = req.user?.id || req.ip || 'anonymous';
+    const result = await experimentService.getAssignment(experiment._id.toString(), userId);
+    const variantConfig = experiment.variants.find((v) => v.key === result.variant)?.config || {};
+    res.json({ variant: result.variant, config: variantConfig, isDefault: result.isDefault, experimentId: experiment._id });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

@@ -6,6 +6,15 @@ import { parsePaginationParams } from '../lib/pagination';
 export async function search(req: Request, res: Response, next: NextFunction) {
   try {
     const pagination = parsePaginationParams(req.query);
+    // Enforce dealership scope: non-admin authenticated users always use their own dealership,
+    // ignoring any client-provided dealershipId to prevent cross-tenant data access
+    let dealershipId: string | undefined;
+    if (req.user && req.user.role !== 'admin') {
+      dealershipId = req.user.dealershipId || req.scope?.dealershipId;
+    } else {
+      dealershipId = req.scope?.dealershipId || req.query.dealershipId as string;
+    }
+
     const params = {
       q: req.query.q as string,
       make: req.query.make as string,
@@ -18,7 +27,7 @@ export async function search(req: Request, res: Response, next: NextFunction) {
       region: req.query.region as string,
       minRegistrationDate: req.query.minRegistrationDate as string,
       maxRegistrationDate: req.query.maxRegistrationDate as string,
-      dealershipId: req.query.dealershipId as string || req.scope?.dealershipId,
+      dealershipId,
     };
 
     const result = await searchVehicles(params, pagination, req.user?.id);

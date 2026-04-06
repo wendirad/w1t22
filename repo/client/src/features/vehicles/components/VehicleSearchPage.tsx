@@ -43,6 +43,16 @@ export default function VehicleSearchPage() {
     queryFn: () => httpClient.get('/admin/filter-presets').then((r) => r.data),
   });
 
+  // A/B experiment assignment for listing layout
+  const { data: experimentData } = useQuery({
+    queryKey: ['experiment', 'listing_layout'],
+    queryFn: () => httpClient.get('/experiments/assignment?feature=listing_layout').then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const listingVariant = experimentData?.variant || 'control';
+  const listingConfig = experimentData?.config || {};
+
   const savePreset = useMutation({
     mutationFn: (name: string) => httpClient.post('/admin/filter-presets', { name, filters: { q, ...filters } }),
     onSuccess: () => refetchPresets(),
@@ -120,8 +130,8 @@ export default function VehicleSearchPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-12 gap-6">
-        <div className="col-span-3">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-3">
           <div className="card space-y-4">
             <h3 className="font-semibold text-gray-900">Filters</h3>
 
@@ -198,7 +208,7 @@ export default function VehicleSearchPage() {
           </div>
         </div>
 
-        <div className="col-span-9">
+        <div className="lg:col-span-9">
           {isLoading && <Spinner className="py-12" />}
           {error && <ErrorMessage message="Failed to load vehicles" onRetry={() => refetch()} />}
 
@@ -218,7 +228,11 @@ export default function VehicleSearchPage() {
             </p>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className={`grid gap-4 ${
+            listingVariant === 'variant_a'
+              ? (listingConfig.columns === 2 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3')
+              : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
+          }`}>
             {data?.data?.map((vehicle: any) => (
               <Link key={vehicle._id} to={`/vehicles/${vehicle._id}`} className="card hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between mb-3">

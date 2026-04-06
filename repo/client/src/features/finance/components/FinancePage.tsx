@@ -97,7 +97,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-6 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
         <div className="card">
           <p className="text-sm text-gray-500">Wallet Balance</p>
           {walletLoading ? <Spinner size="sm" /> : (
@@ -115,7 +115,7 @@ export default function FinancePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
           <h2 className="text-lg font-semibold mb-3">Orders Awaiting Payment</h2>
           {orders?.data?.length === 0 && <p className="text-gray-500 text-sm">No invoiced orders.</p>}

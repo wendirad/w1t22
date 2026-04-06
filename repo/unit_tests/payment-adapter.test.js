@@ -19,11 +19,22 @@ if (fs.existsSync(envPath)) {
   }
 }
 
+// Register TypeScript support for direct source imports (no build step required)
+try {
+  require('ts-node').register({
+    transpileOnly: true,
+    project: path.join(__dirname, '..', 'server', 'tsconfig.json'),
+    compilerOptions: { module: 'commonjs' },
+  });
+} catch { /* ts-node not available; fall back to dist */ }
+
+let adapterModule;
+try { adapterModule = require('../server/src/services/finance/payment-adapter'); } catch { adapterModule = require('../server/dist/services/finance/payment-adapter'); }
 const {
   OfflinePaymentAdapter,
   OnlinePaymentAdapter,
   resolveAdapter,
-} = require('../server/dist/services/finance/payment-adapter');
+} = adapterModule;
 
 let passed = 0;
 let failed = 0;

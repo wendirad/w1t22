@@ -6,10 +6,26 @@ import { logAuditEvent } from '../services/audit.service';
 
 function assertOrderAccess(order: any, req: Request) {
   if (req.user!.role === 'admin') return;
+
   const userDealership = req.user!.dealershipId || req.scope?.dealershipId;
-  if (userDealership && order.dealershipId?.toString() === userDealership) return;
-  if (order.buyerId?.toString() === req.user!.id || (order.buyerId as any)?._id?.toString() === req.user!.id) return;
-  throw new ForbiddenError('You do not have access to this order');
+  const orderDealership = order.dealershipId?.toString();
+  const orderBuyerId = (order.buyerId as any)?._id?.toString() || order.buyerId?.toString();
+
+  // Buyers: must own the order AND be in the same dealership
+  if (req.user!.role === 'buyer') {
+    if (orderBuyerId !== req.user!.id) {
+      throw new ForbiddenError('You do not have access to this order');
+    }
+    if (userDealership && orderDealership !== userDealership) {
+      throw new ForbiddenError('You do not have access to this order');
+    }
+    return;
+  }
+
+  // Staff/Finance: scoped to their dealership only
+  if (!userDealership || orderDealership !== userDealership) {
+    throw new ForbiddenError('You do not have access to this order');
+  }
 }
 
 // Events that require staff/finance/admin role — buyers can only CANCEL their own orders
@@ -68,15 +84,17 @@ export async function listOrders(req: Request, res: Response, next: NextFunction
     const filters: any = { status: req.query.status as string };
 
     if (role === 'buyer') {
-      // Buyers can only see their own orders
+      // Buyers can only see their own orders, scoped to their dealership
       filters.buyerId = req.user!.id;
+      const buyerDealership = req.user!.dealershipId || req.scope?.dealershipId;
+      if (buyerDealership) filters.dealershipId = buyerDealership;
     } else if (role === 'admin') {
       // Admins can optionally filter by buyer or dealership
       if (req.query.buyerId) filters.buyerId = req.query.buyerId as string;
       if (req.scope?.dealershipId) filters.dealershipId = req.scope.dealershipId;
       else if (req.query.dealershipId) filters.dealershipId = req.query.dealershipId as string;
     } else {
-      // Staff/finance: scoped to their dealership
+      // Staff/finance: always scoped to their dealership — never trust client input
       filters.dealershipId = req.user!.dealershipId || req.scope?.dealershipId;
     }
     const result = await orderService.listOrders(filters, pagination);

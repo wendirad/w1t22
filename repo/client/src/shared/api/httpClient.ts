@@ -38,6 +38,13 @@ httpClient.interceptors.request.use(async (config) => {
   const timestamp = new Date().toISOString();
   config.headers['X-Timestamp'] = timestamp;
 
+  // Inject the admin-selected dealership into every request so the backend
+  // can reliably enforce dealership context via the dealershipScope middleware
+  const selectedDealership = localStorage.getItem('selectedDealershipId');
+  if (token && selectedDealership) {
+    config.headers['X-Dealership-Id'] = selectedDealership;
+  }
+
   // Sign all authenticated requests using the per-session signing key
   const signingKey = localStorage.getItem('signingKey');
   if (token && signingKey) {
