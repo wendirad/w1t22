@@ -1,5 +1,24 @@
 const assert = require('assert');
+const path = require('path');
 
+// Register TypeScript support for direct source imports
+try {
+  require('ts-node').register({
+    transpileOnly: true,
+    project: path.join(__dirname, '..', 'server', 'tsconfig.json'),
+    compilerOptions: { module: 'commonjs' },
+  });
+} catch { /* ts-node not available; fall back to dist */ }
+
+// Import the PRODUCTION synonym mapping and expansion functions.
+// These are the same functions that the async expandSynonyms() calls at runtime
+// after loading synonyms from MongoDB.
+let synonymModule;
+try { synonymModule = require('../server/src/services/search/synonym.service'); } catch { synonymModule = require('../server/dist/services/search/synonym.service'); }
+
+const { buildSynonymMap, expandSynonymsFromCache } = synonymModule;
+
+// Use the same seed data structure that seeds/index.ts writes to the Synonym collection
 const synonymData = [
   { canonical: 'Chevrolet', aliases: ['Chevy', 'Chev'], field: 'make' },
   { canonical: 'BMW', aliases: ['Bimmer', 'Beemer'], field: 'make' },
@@ -7,28 +26,6 @@ const synonymData = [
   { canonical: 'F-150', aliases: ['F150', 'F 150'], field: 'model' },
   { canonical: 'Corvette', aliases: ['Vette', 'C8'], field: 'model' },
 ];
-
-function buildSynonymMap(synonyms) {
-  const cache = new Map();
-  for (const syn of synonyms) {
-    if (!cache.has(syn.field)) cache.set(syn.field, new Map());
-    const fieldMap = cache.get(syn.field);
-    fieldMap.set(syn.canonical.toLowerCase(), syn.aliases.map((a) => a.toLowerCase()));
-    for (const alias of syn.aliases) {
-      fieldMap.set(alias.toLowerCase(), [syn.canonical.toLowerCase()]);
-    }
-  }
-  return cache;
-}
-
-function expandSynonyms(term, field, cache) {
-  const fieldMap = cache.get(field);
-  if (!fieldMap) return [term];
-  const lowerTerm = term.toLowerCase();
-  const expansions = fieldMap.get(lowerTerm);
-  if (!expansions) return [term];
-  return [term, ...expansions];
-}
 
 const cache = buildSynonymMap(synonymData);
 
@@ -46,73 +43,73 @@ function test(name, fn) {
   }
 }
 
-console.log('Synonym Expansion Tests:');
+console.log('Synonym Expansion Tests (using production buildSynonymMap + expandSynonymsFromCache):');
 
 test('Chevy expands to Chevrolet', () => {
-  const result = expandSynonyms('Chevy', 'make', cache);
+  const result = expandSynonymsFromCache('Chevy', 'make', cache);
   assert.ok(result.includes('Chevy'));
   assert.ok(result.includes('chevrolet'));
 });
 
 test('Chevrolet expands to aliases', () => {
-  const result = expandSynonyms('Chevrolet', 'make', cache);
+  const result = expandSynonymsFromCache('Chevrolet', 'make', cache);
   assert.ok(result.includes('Chevrolet'));
   assert.ok(result.includes('chevy'));
   assert.ok(result.includes('chev'));
 });
 
 test('Bimmer expands to BMW', () => {
-  const result = expandSynonyms('Bimmer', 'make', cache);
+  const result = expandSynonymsFromCache('Bimmer', 'make', cache);
   assert.ok(result.includes('Bimmer'));
   assert.ok(result.includes('bmw'));
 });
 
 test('BMW expands to aliases', () => {
-  const result = expandSynonyms('BMW', 'make', cache);
+  const result = expandSynonymsFromCache('BMW', 'make', cache);
   assert.ok(result.includes('BMW'));
   assert.ok(result.includes('bimmer'));
   assert.ok(result.includes('beemer'));
 });
 
 test('Mercedes expands to Mercedes-Benz', () => {
-  const result = expandSynonyms('Mercedes', 'make', cache);
+  const result = expandSynonymsFromCache('Mercedes', 'make', cache);
   assert.ok(result.includes('Mercedes'));
   assert.ok(result.includes('mercedes-benz'));
 });
 
 test('F150 expands to F-150', () => {
-  const result = expandSynonyms('F150', 'model', cache);
+  const result = expandSynonymsFromCache('F150', 'model', cache);
   assert.ok(result.includes('F150'));
   assert.ok(result.includes('f-150'));
 });
 
 test('Vette expands to Corvette', () => {
-  const result = expandSynonyms('Vette', 'model', cache);
+  const result = expandSynonymsFromCache('Vette', 'model', cache);
   assert.ok(result.includes('Vette'));
   assert.ok(result.includes('corvette'));
 });
 
 test('unknown term returns as-is', () => {
-  const result = expandSynonyms('Toyota', 'make', cache);
+  const result = expandSynonymsFromCache('Toyota', 'make', cache);
   assert.deepStrictEqual(result, ['Toyota']);
 });
 
 test('expansion is case-insensitive', () => {
-  const result = expandSynonyms('chevy', 'make', cache);
+  const result = expandSynonymsFromCache('chevy', 'make', cache);
   assert.ok(result.includes('chevy'));
   assert.ok(result.includes('chevrolet'));
 });
 
 test('wrong field returns term as-is', () => {
-  const result = expandSynonyms('Chevy', 'model', cache);
+  const result = expandSynonymsFromCache('Chevy', 'model', cache);
   assert.deepStrictEqual(result, ['Chevy']);
 });
 
 test('bi-directional: alias to canonical and back', () => {
-  const aliasResult = expandSynonyms('Merc', 'make', cache);
+  const aliasResult = expandSynonymsFromCache('Merc', 'make', cache);
   assert.ok(aliasResult.includes('mercedes-benz'));
 
-  const canonicalResult = expandSynonyms('Mercedes-Benz', 'make', cache);
+  const canonicalResult = expandSynonymsFromCache('Mercedes-Benz', 'make', cache);
   assert.ok(canonicalResult.includes('mercedes'));
   assert.ok(canonicalResult.includes('merc'));
   assert.ok(canonicalResult.includes('benz'));

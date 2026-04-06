@@ -11,6 +11,13 @@ function generateInvoiceNumber(): string {
   return `INV-${ts}`;
 }
 
+/**
+ * Pure tax arithmetic — no database access. Exported for unit tests.
+ */
+export function computeTaxAmount(subtotal: number, rate: number): number {
+  return Math.round(subtotal * rate);
+}
+
 async function calculateTax(dealershipId: string, subtotal: number) {
   const dealership = await Dealership.findById(dealershipId);
   if (!dealership) return { taxBreakdown: [], totalTax: 0 };
@@ -27,7 +34,7 @@ async function calculateTax(dealershipId: string, subtotal: number) {
 
   if (!taxRate) return { taxBreakdown: [], totalTax: 0 };
 
-  const taxAmount = Math.round(subtotal * taxRate.rate);
+  const taxAmount = computeTaxAmount(subtotal, taxRate.rate);
   const taxBreakdown = [
     {
       jurisdiction: county ? `${county}, ${state}` : state,
@@ -52,7 +59,7 @@ export async function generateInvoicePreview(orderId: string) {
     const vehicle = item.vehicleId;
     const vehicleTotal = item.subtotal;
     const taxRate = taxBreakdown.length > 0 ? taxBreakdown[0].rate : 0;
-    const taxAmount = Math.round(vehicleTotal * taxRate);
+    const taxAmount = computeTaxAmount(vehicleTotal, taxRate);
 
     return {
       description: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : 'Vehicle',

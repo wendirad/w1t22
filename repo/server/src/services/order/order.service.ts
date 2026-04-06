@@ -27,10 +27,17 @@ export async function createOrderFromCart(
   dealershipId: string,
   idempotencyKey: string
 ) {
-  // Scope idempotency by user + dealership to prevent cross-tenant collisions
+  // Scope idempotency by user + dealership to prevent cross-tenant collisions.
+  // Check for both the base key (single-order case) and any child keys (split-order
+  // case) so that a retry after a partial failure returns the already-created orders
+  // instead of hitting a unique index violation on the child keys.
   const scopedIdempotencyKey = `${userId}:${dealershipId}:${idempotencyKey}`;
-  const existing = await Order.findOne({ idempotencyKey: scopedIdempotencyKey });
-  if (existing) return existing;
+  const existingOrders = await Order.find({
+    idempotencyKey: { $regex: `^${scopedIdempotencyKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}` },
+  });
+  if (existingOrders.length > 0) {
+    return existingOrders.length === 1 ? existingOrders[0] : existingOrders;
+  }
 
   const cart = await Cart.findOne({ userId, dealershipId }).populate('items.vehicleId');
   if (!cart || cart.items.length === 0) {

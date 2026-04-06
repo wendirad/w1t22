@@ -24,8 +24,9 @@ export async function processPayment(input: PaymentInput) {
   // Validate payment method before any DB operations
   const adapter = resolveAdapter(input.method);
 
-  // Scope idempotency by dealership to prevent cross-tenant collisions
-  const scopedIdempotencyKey = `${input.dealershipId}:${input.idempotencyKey}`;
+  // Scope idempotency by dealership + order + invoice so different users or orders
+  // within the same dealership cannot collide on client-generated keys.
+  const scopedIdempotencyKey = `${input.dealershipId}:${input.orderId}:${input.invoiceId}:${input.idempotencyKey}`;
   const existing = await Payment.findOne({ idempotencyKey: scopedIdempotencyKey });
   if (existing) return existing;
 

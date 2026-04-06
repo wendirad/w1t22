@@ -6,6 +6,7 @@ import { Dealership } from '../models/dealership.model';
 import { FilterPreset } from '../models/filter-preset.model';
 import { PermissionOverride } from '../models/permission-override.model';
 import * as experimentService from '../services/experiment.service';
+import { rotateKey } from '../services/privacy/encryption.service';
 import { clearSynonymCache } from '../services/search/synonym.service';
 import { logAuditEvent } from '../services/audit.service';
 import { NotFoundError } from '../lib/errors';
@@ -425,6 +426,26 @@ export async function deletePermissionOverride(req: Request, res: Response, next
       requestId: (req as any).requestId,
     });
     res.json({ msg: 'Permission override deleted' });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Encryption Key Rotation
+export async function rotateEncryptionKey(req: Request, res: Response, next: NextFunction) {
+  try {
+    const newKeyId = await rotateKey();
+    await logAuditEvent({
+      userId: req.user!.id,
+      role: req.user!.role,
+      ip: req.ip || '',
+      action: 'encryption_key.rotate',
+      resourceType: 'encryption_key',
+      resourceId: newKeyId,
+      after: { newKeyId },
+      requestId: (req as any).requestId,
+    });
+    res.json({ msg: 'Encryption key rotated', keyId: newKeyId });
   } catch (error) {
     next(error);
   }

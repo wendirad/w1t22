@@ -50,3 +50,40 @@ export function clearSynonymCache(): void {
   synonymCache = null;
   cacheTimestamp = 0;
 }
+
+/**
+ * Pure synonym map builder — no database access. Extracted so unit tests can
+ * import and exercise the real production mapping logic.
+ */
+export function buildSynonymMap(
+  synonyms: Array<{ canonical: string; aliases: string[]; field: string }>
+): Map<string, Map<string, string[]>> {
+  const cache = new Map<string, Map<string, string[]>>();
+  for (const syn of synonyms) {
+    if (!cache.has(syn.field)) {
+      cache.set(syn.field, new Map());
+    }
+    const fieldMap = cache.get(syn.field)!;
+    fieldMap.set(syn.canonical.toLowerCase(), syn.aliases.map((a) => a.toLowerCase()));
+    for (const alias of syn.aliases) {
+      fieldMap.set(alias.toLowerCase(), [syn.canonical.toLowerCase()]);
+    }
+  }
+  return cache;
+}
+
+/**
+ * Pure synonym expansion against a pre-built cache — no database access.
+ */
+export function expandSynonymsFromCache(
+  term: string,
+  field: string,
+  cache: Map<string, Map<string, string[]>>
+): string[] {
+  const fieldMap = cache.get(field);
+  if (!fieldMap) return [term];
+  const lowerTerm = term.toLowerCase();
+  const expansions = fieldMap.get(lowerTerm);
+  if (!expansions) return [term];
+  return [term, ...expansions];
+}

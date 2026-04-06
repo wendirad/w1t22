@@ -62,4 +62,7 @@ router.post('/permission-overrides', requireRole(Role.ADMIN), validate(createPer
 router.patch('/permission-overrides/:id', requireRole(Role.ADMIN), validate(mongoIdParam, 'params'), validate(updatePermissionOverrideSchema), adminController.updatePermissionOverride);
 router.delete('/permission-overrides/:id', requireRole(Role.ADMIN), validate(mongoIdParam, 'params'), adminController.deletePermissionOverride);
 
+// Encryption Key Rotation
+router.post('/encryption/rotate', requireRole(Role.ADMIN), adminController.rotateEncryptionKey);
+
 export default router;
