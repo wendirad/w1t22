@@ -18,19 +18,25 @@ export async function recordTransaction(params: {
   referenceId: string;
   description: string;
   idempotencyKey: string;
+  session?: mongoose.ClientSession;
 }) {
-  const existing = await WalletTransaction.findOne({
-    idempotencyKey: `${params.idempotencyKey}-debit`,
-  });
+  const { debitKey } = deriveIdempotencyKeys(params.idempotencyKey);
+  const existing = await WalletTransaction.findOne({ idempotencyKey: debitKey });
   if (existing) return existing;
 
-  const session = await mongoose.startSession();
+  // When a caller provides an external session, all writes join that session's
+  // transaction so that payment + ledger + invoice are atomic.  When no session
+  // is provided (e.g. standalone refund), create a local one.
+  const externalSession = params.session;
+  const session = externalSession || await mongoose.startSession();
 
   try {
     let debitTx: any;
     let creditTx: any;
 
-    await session.withTransaction(async () => {
+    const work = async () => {
+      const { debitKey, creditKey } = deriveIdempotencyKeys(params.idempotencyKey);
+
       const debitBalance = await WalletBalance.findOneAndUpdate(
         { accountId: params.debitAccountId },
         {
@@ -54,7 +60,7 @@ export async function recordTransaction(params: {
             referenceId: params.referenceId,
             balanceAfter: debitBalance!.balance,
             description: params.description,
-            idempotencyKey: `${params.idempotencyKey}-debit`,
+            idempotencyKey: debitKey,
           },
         ],
         { session }
@@ -83,12 +89,20 @@ export async function recordTransaction(params: {
             referenceId: params.referenceId,
             balanceAfter: creditBalance!.balance,
             description: params.description,
-            idempotencyKey: `${params.idempotencyKey}-credit`,
+            idempotencyKey: creditKey,
           },
         ],
         { session }
       );
-    });
+    };
+
+    if (externalSession) {
+      // External session: the caller owns the transaction — just run the work.
+      await work();
+    } else {
+      // No external session: wrap in our own transaction.
+      await session.withTransaction(work);
+    }
 
     logger.info(
       { debitAccount: params.debitAccountId, creditAccount: params.creditAccountId, amount: params.amount },
@@ -97,7 +111,9 @@ export async function recordTransaction(params: {
 
     return { debit: debitTx[0], credit: creditTx[0] };
   } finally {
-    await session.endSession();
+    if (!externalSession) {
+      await session.endSession();
+    }
   }
 }
 

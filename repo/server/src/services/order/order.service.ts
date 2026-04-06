@@ -327,10 +327,23 @@ export async function transitionOrder(
   orderId: string,
   event: OrderEvent,
   userId: string,
-  reason: string = ''
+  reason: string = '',
+  idempotencyKey?: string
 ) {
   const order = await Order.findById(orderId);
   if (!order) throw new NotFoundError('Order not found');
+
+  // Idempotency: if this exact transition was already applied, return the
+  // current order state instead of attempting a duplicate transition.
+  if (idempotencyKey) {
+    const existingEvent = await OrderEventModel.findOne({
+      orderId: order._id,
+      'metadata.idempotencyKey': idempotencyKey,
+    });
+    if (existingEvent) {
+      return order;
+    }
+  }
 
   const originalStatus = order.status;
   const fsm = createOrderStateMachine(order.status as OrderStatus);
@@ -478,6 +491,7 @@ export async function transitionOrder(
     toStatus: to,
     triggeredBy: userId,
     reason,
+    metadata: idempotencyKey ? { idempotencyKey } : {},
   });
 
   logger.info({ orderId, from, to, event, userId }, 'Order transitioned');

@@ -164,6 +164,7 @@ export async function processPayment(input: PaymentInput) {
         referenceId: payment._id.toString(),
         description: `Payment for order ${order.orderNumber}`,
         idempotencyKey: `payment-${payment._id}`,
+        session,
       });
 
       invoice.status = InvoiceStatus.PAID;
