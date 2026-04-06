@@ -1,5 +1,23 @@
 const assert = require('assert');
 const path = require('path');
+const fs = require('fs');
+
+// Load .env so config module can initialize (required by order.service imports)
+const envPath = path.join(__dirname, '..', '.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf8');
+  for (const line of envContent.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith('#')) {
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx > 0) {
+        const key = trimmed.slice(0, eqIdx);
+        const value = trimmed.slice(eqIdx + 1);
+        if (!process.env[key]) process.env[key] = value;
+      }
+    }
+  }
+}
 
 // Register TypeScript support for direct source imports
 try {
@@ -10,65 +28,14 @@ try {
   });
 } catch { /* ts-node not available; fall back to dist */ }
 
-// Import production enums so tests break if enum values change
-let enumsModule;
+// Import the PRODUCTION validation and arithmetic functions directly.
+// These are the same functions that mergeOrders() calls at runtime.
+let orderServiceModule, enumsModule;
+try { orderServiceModule = require('../server/src/services/order/order.service'); } catch { orderServiceModule = require('../server/dist/services/order/order.service'); }
 try { enumsModule = require('../server/src/types/enums'); } catch { enumsModule = require('../server/dist/types/enums'); }
+
+const { validateMergeOrders, computeMergedOrder } = orderServiceModule;
 const { OrderStatus } = enumsModule;
-
-// Import production error types to assert the same error class is thrown
-let errorsModule;
-try { errorsModule = require('../server/src/lib/errors'); } catch { errorsModule = require('../server/dist/lib/errors'); }
-const { BadRequestError, NotFoundError } = errorsModule;
-
-// The production mergeOrders in order.service.ts uses MongoDB sessions and
-// transactions. We cannot call it directly without a running database.
-// Instead we extract and test the pure validation rules that the production
-// code enforces BEFORE touching the database. Any change to these rules in
-// production will cause these tests to fail because the assertions are
-// derived from the production enum values and error messages.
-
-/**
- * Applies the same pre-merge validation that order.service.ts mergeOrders()
- * performs at lines 461-496 BEFORE starting the Mongo transaction.
- * This function is kept deliberately thin — it only validates, it does not
- * mutate — so any divergence from production logic surfaces immediately.
- */
-function validateMerge(orders) {
-  if (orders.length < 2) {
-    throw new BadRequestError('At least two orders are required for merge');
-  }
-
-  const dealershipIds = new Set(orders.map((o) => o.dealershipId.toString()));
-  if (dealershipIds.size > 1) {
-    throw new BadRequestError('Cannot merge orders from different dealerships');
-  }
-
-  const buyerIds = new Set(orders.map((o) => o.buyerId.toString()));
-  if (buyerIds.size > 1) {
-    throw new BadRequestError('Cannot merge orders from different buyers');
-  }
-
-  for (const order of orders) {
-    if (order.status !== OrderStatus.CREATED && order.status !== OrderStatus.RESERVED) {
-      throw new BadRequestError(
-        `Order ${order.orderNumber} is in "${order.status}" status and cannot be merged`
-      );
-    }
-  }
-}
-
-/**
- * Applies the same item-merge arithmetic that production code performs inside
- * the transaction: collect all items, recompute totals.
- */
-function computeMergeResult(orders) {
-  const allItems = orders.flatMap((o) => o.items);
-  const subtotal = allItems.reduce((sum, item) => sum + item.subtotal, 0);
-  return {
-    items: allItems,
-    totals: { subtotal, tax: 0, total: subtotal },
-  };
-}
 
 function createOrder(id, dealershipId, buyerId, items, status) {
   return {
@@ -87,8 +54,6 @@ function createOrder(id, dealershipId, buyerId, items, status) {
       total: items.reduce((s, i) => s + i.subtotal, 0),
     },
     status,
-    parentOrderId: null,
-    childOrderIds: [],
   };
 }
 
@@ -106,98 +71,93 @@ function test(name, fn) {
   }
 }
 
-console.log('Order Merge Tests (using production enums + error types):');
+console.log('Order Merge Tests (using production validateMergeOrders + computeMergedOrder):');
 
-test('merge validation passes for two CREATED orders in same dealership and buyer', () => {
-  const order1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 20000 }], OrderStatus.CREATED);
-  const order2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 30000 }], OrderStatus.CREATED);
-  validateMerge([order1, order2]); // should not throw
+test('validation passes for two CREATED orders in same dealership and buyer', () => {
+  const o1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 20000 }], OrderStatus.CREATED);
+  const o2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 30000 }], OrderStatus.CREATED);
+  validateMergeOrders([o1, o2]); // should not throw
 });
 
-test('merge computes correct totals from all source orders', () => {
-  const order1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 20000 }], OrderStatus.CREATED);
-  const order2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 30000 }], OrderStatus.CREATED);
-  const result = computeMergeResult([order1, order2]);
+test('computeMergedOrder computes correct totals', () => {
+  const o1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 20000 }], OrderStatus.CREATED);
+  const o2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 30000 }], OrderStatus.CREATED);
+  const result = computeMergedOrder([o1, o2]);
   assert.strictEqual(result.items.length, 2);
   assert.strictEqual(result.totals.subtotal, 50000);
   assert.strictEqual(result.totals.total, 50000);
 });
 
-test('merged items contain all vehicles from source orders', () => {
-  const order1 = createOrder('1', 'deal1', 'buyer1', [
-    { vehicleId: 'v1', subtotal: 10000 },
-    { vehicleId: 'v2', subtotal: 12000 },
-  ], OrderStatus.CREATED);
-  const order2 = createOrder('2', 'deal1', 'buyer1', [
-    { vehicleId: 'v3', subtotal: 15000 },
-  ], OrderStatus.RESERVED);
-  const result = computeMergeResult([order1, order2]);
+test('computeMergedOrder collects all items from all orders', () => {
+  const o1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }, { vehicleId: 'v2', subtotal: 12000 }], OrderStatus.CREATED);
+  const o2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v3', subtotal: 15000 }], OrderStatus.RESERVED);
+  const result = computeMergedOrder([o1, o2]);
   assert.strictEqual(result.items.length, 3);
-  const vehicleIds = result.items.map((i) => i.vehicleId);
-  assert.ok(vehicleIds.includes('v1'));
-  assert.ok(vehicleIds.includes('v2'));
-  assert.ok(vehicleIds.includes('v3'));
+  const vids = result.items.map((i) => i.vehicleId);
+  assert.ok(vids.includes('v1'));
+  assert.ok(vids.includes('v2'));
+  assert.ok(vids.includes('v3'));
 });
 
-test('cannot merge orders from different dealerships (BadRequestError)', () => {
-  const order1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
-  const order2 = createOrder('2', 'deal2', 'buyer1', [{ vehicleId: 'v2', subtotal: 15000 }], OrderStatus.CREATED);
+test('rejects orders from different dealerships (code 400)', () => {
+  const o1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
+  const o2 = createOrder('2', 'deal2', 'buyer1', [{ vehicleId: 'v2', subtotal: 15000 }], OrderStatus.CREATED);
   try {
-    validateMerge([order1, order2]);
+    validateMergeOrders([o1, o2]);
     assert.fail('Should have thrown');
   } catch (e) {
-    assert.strictEqual(e.code, 400, `Expected error code 400, got ${e.code}`);
+    assert.strictEqual(e.code, 400);
     assert.ok(e.message.includes('different dealerships'));
   }
 });
 
-test('cannot merge orders from different buyers (BadRequestError)', () => {
-  const order1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
-  const order2 = createOrder('2', 'deal1', 'buyer2', [{ vehicleId: 'v2', subtotal: 15000 }], OrderStatus.CREATED);
+test('rejects orders from different buyers (code 400)', () => {
+  const o1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
+  const o2 = createOrder('2', 'deal1', 'buyer2', [{ vehicleId: 'v2', subtotal: 15000 }], OrderStatus.CREATED);
   try {
-    validateMerge([order1, order2]);
+    validateMergeOrders([o1, o2]);
     assert.fail('Should have thrown');
   } catch (e) {
-    assert.strictEqual(e.code, 400, `Expected error code 400, got ${e.code}`);
+    assert.strictEqual(e.code, 400);
     assert.ok(e.message.includes('different buyers'));
   }
 });
 
-test('cannot merge orders in non-mergeable statuses', () => {
+test('rejects orders in non-mergeable statuses', () => {
   for (const status of [OrderStatus.INVOICED, OrderStatus.SETTLED, OrderStatus.FULFILLED, OrderStatus.CANCELLED]) {
-    const order1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
-    const order2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 15000 }], status);
+    const o1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
+    const o2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 15000 }], status);
     try {
-      validateMerge([order1, order2]);
+      validateMergeOrders([o1, o2]);
       assert.fail(`Should have thrown for status: ${status}`);
     } catch (e) {
-      assert.strictEqual(e.code, 400, `Expected error code 400 for ${status}, got ${e.code}`);
+      assert.strictEqual(e.code, 400);
       assert.ok(e.message.includes('cannot be merged'));
     }
   }
 });
 
-test('requires at least two orders (BadRequestError)', () => {
-  const order1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
+test('requires at least two orders (code 400)', () => {
+  const o1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
   try {
-    validateMerge([order1]);
+    validateMergeOrders([o1]);
     assert.fail('Should have thrown');
   } catch (e) {
-    assert.strictEqual(e.code, 400, `Expected error code 400, got ${e.code}`);
+    assert.strictEqual(e.code, 400);
     assert.ok(e.message.includes('At least two'));
   }
 });
 
 test('RESERVED orders can be merged', () => {
-  const order1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.RESERVED);
-  const order2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 15000 }], OrderStatus.RESERVED);
-  validateMerge([order1, order2]); // should not throw
+  const o1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.RESERVED);
+  const o2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 15000 }], OrderStatus.RESERVED);
+  validateMergeOrders([o1, o2]); // should not throw
 });
 
-test('mixed CREATED and RESERVED orders can be merged', () => {
-  const order1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
-  const order2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 15000 }], OrderStatus.RESERVED);
-  validateMerge([order1, order2]); // should not throw
+test('mixed CREATED and RESERVED can be merged', () => {
+  const o1 = createOrder('1', 'deal1', 'buyer1', [{ vehicleId: 'v1', subtotal: 10000 }], OrderStatus.CREATED);
+  const o2 = createOrder('2', 'deal1', 'buyer1', [{ vehicleId: 'v2', subtotal: 15000 }], OrderStatus.RESERVED);
+  validateMergeOrders([o1, o2]); // should not throw
 });
 
 console.log(`\nOrder Merge: ${passed} passed, ${failed} failed`);

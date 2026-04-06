@@ -206,28 +206,48 @@ async function runTests() {
     assert(res.status === 409, `Expected 409, got ${res.status}`);
   });
 
-  // Duplicate email across different dealerships
-  await test('POST /auth/register allows same email in different dealership', async () => {
-    // Get dealerships
+  // Email is globally unique — same email in a different dealership must be rejected
+  // to prevent non-deterministic login resolution
+  await test('POST /auth/register rejects same email in different dealership (409)', async () => {
     const dealRes = await request('GET', '/api/v1/admin/dealerships', null, adminToken);
     assert(dealRes.status === 200 && dealRes.data.length >= 2, 'Expected at least 2 dealerships');
     testDealershipId = dealRes.data[0]._id;
     testDealershipId2 = dealRes.data[1]._id;
 
-    const uniqueEmail = `crossdeal-${Date.now()}@motorlot.com`;
+    const uniqueEmail = `globaluniq-${Date.now()}@motorlot.com`;
     const res1 = await request('POST', '/api/v1/auth/register', {
       email: uniqueEmail, password: 'test12345',
-      firstName: 'Cross', lastName: 'Dealer',
+      firstName: 'First', lastName: 'User',
       dealershipId: testDealershipId,
     });
     assert(res1.status === 201, `Expected 201, got ${res1.status}`);
 
+    // Same email, different dealership — must be rejected
     const res2 = await request('POST', '/api/v1/auth/register', {
       email: uniqueEmail, password: 'test12345',
-      firstName: 'Cross', lastName: 'Dealer',
+      firstName: 'Second', lastName: 'User',
       dealershipId: testDealershipId2,
     });
-    assert(res2.status === 201, `Expected 201 for same email in different dealership, got ${res2.status}`);
+    assert(res2.status === 409, `Expected 409 for duplicate email across dealerships, got ${res2.status}`);
+  });
+
+  await test('login resolves deterministically to the correct user', async () => {
+    // Register a user and verify login returns that exact user
+    const testEmail = `logintest-${Date.now()}@motorlot.com`;
+    const regRes = await request('POST', '/api/v1/auth/register', {
+      email: testEmail, password: 'test12345',
+      firstName: 'Login', lastName: 'Test',
+      dealershipId: testDealershipId,
+    });
+    assert(regRes.status === 201, `Expected 201, got ${regRes.status}`);
+    const registeredUserId = regRes.data.user._id;
+
+    const loginRes = await request('POST', '/api/v1/auth/login', {
+      email: testEmail, password: 'test12345',
+    });
+    assert(loginRes.status === 200, `Expected 200, got ${loginRes.status}`);
+    assert(loginRes.data.user._id === registeredUserId, 'Login must resolve to the registered user');
+    assert(loginRes.data.user.dealershipId === testDealershipId, 'Login must resolve to correct dealership');
   });
 
   // ===== Authentication enforcement on ALL protected routes =====

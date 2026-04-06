@@ -513,14 +513,14 @@ export async function getOrderEvents(orderId: string) {
   return OrderEventModel.find({ orderId }).sort({ timestamp: 1 });
 }
 
-export async function mergeOrders(orderIds: string[], userId: string) {
-  if (orderIds.length < 2) {
+/**
+ * Pure merge validation — no database access. Extracted so unit tests can import
+ * and exercise the real production validation logic without a running MongoDB.
+ * Throws BadRequestError on any rule violation.
+ */
+export function validateMergeOrders(orders: Array<{ dealershipId: any; buyerId: any; status: string; orderNumber: string }>) {
+  if (orders.length < 2) {
     throw new BadRequestError('At least two orders are required for merge');
-  }
-
-  const orders = await Order.find({ _id: { $in: orderIds } });
-  if (orders.length !== orderIds.length) {
-    throw new NotFoundError('One or more orders not found');
   }
 
   const dealershipIds = new Set(orders.map((o) => o.dealershipId.toString()));
@@ -540,6 +540,28 @@ export async function mergeOrders(orderIds: string[], userId: string) {
       );
     }
   }
+}
+
+/**
+ * Pure merge arithmetic — no database access. Computes the combined items and totals.
+ */
+export function computeMergedOrder(orders: Array<{ items: any[] }>) {
+  const allItems = orders.flatMap((o) => o.items);
+  const subtotal = allItems.reduce((sum, item) => sum + item.subtotal, 0);
+  return { items: allItems, totals: { subtotal, tax: 0, total: subtotal } };
+}
+
+export async function mergeOrders(orderIds: string[], userId: string) {
+  if (orderIds.length < 2) {
+    throw new BadRequestError('At least two orders are required for merge');
+  }
+
+  const orders = await Order.find({ _id: { $in: orderIds } });
+  if (orders.length !== orderIds.length) {
+    throw new NotFoundError('One or more orders not found');
+  }
+
+  validateMergeOrders(orders);
 
   const session = await mongoose.startSession();
 

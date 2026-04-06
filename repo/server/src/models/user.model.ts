@@ -54,7 +54,9 @@ const userSchema = new Schema<IUser>(
   { timestamps: true }
 );
 
-userSchema.index({ email: 1, dealershipId: 1 }, { unique: true });
+// Email is globally unique — login resolves identity by email alone, so allowing
+// the same email in multiple dealerships would create non-deterministic authentication.
+userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ dealershipId: 1, role: 1 });
 
 userSchema.pre('save', async function (next) {

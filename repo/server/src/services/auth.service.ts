@@ -81,12 +81,10 @@ async function decryptSensitiveFields(userJson: any): Promise<any> {
 }
 
 export async function register(input: RegisterInput) {
-  // Public registration always creates buyer — role escalation only via admin endpoint
-  const targetDealershipId = input.dealershipId || null;
-  const existing = await User.findOne({
-    email: input.email,
-    dealershipId: targetDealershipId,
-  });
+  // Public registration always creates buyer — role escalation only via admin endpoint.
+  // Email is globally unique: login resolves by email alone, so duplicates across
+  // dealerships would cause non-deterministic principal resolution.
+  const existing = await User.findOne({ email: input.email });
   if (existing) {
     throw new ConflictError('Email already registered');
   }
@@ -116,6 +114,8 @@ export async function register(input: RegisterInput) {
 }
 
 export async function login(email: string, password: string) {
+  // Email is globally unique (enforced by model index and registration), so this
+  // query is deterministic — it always resolves to exactly zero or one user.
   const user = await User.findOne({ email, isActive: true });
   if (!user) {
     throw new UnauthorizedError('Invalid email or password');

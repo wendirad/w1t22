@@ -6,7 +6,7 @@ import { getCachedResult, setCachedResult } from './cache.service';
 import { getTrendingKeywords } from './trending.service';
 import { PaginationParams, buildPaginatedResult } from '../../lib/pagination';
 
-interface SearchParams {
+export interface SearchParams {
   q?: string;
   make?: string;
   model?: string;
@@ -19,6 +19,42 @@ interface SearchParams {
   minRegistrationDate?: string;
   maxRegistrationDate?: string;
   dealershipId?: string;
+}
+
+/**
+ * Pure query-building logic — no database access. Extracted so unit tests can
+ * import and exercise the real production filter construction without MongoDB.
+ * Returns a MongoDB-compatible query object.
+ */
+export function buildSearchQuery(params: Omit<SearchParams, 'q'>): Record<string, any> {
+  const query: any = { status: VehicleStatus.AVAILABLE };
+
+  if (params.dealershipId) query.dealershipId = params.dealershipId;
+  if (params.make) query.make = new RegExp(`^${params.make}$`, 'i');
+  if (params.model) query.model = new RegExp(`^${params.model}$`, 'i');
+  if (params.year) query.year = params.year;
+
+  if (params.minPrice || params.maxPrice) {
+    query.price = {};
+    if (params.minPrice) query.price.$gte = params.minPrice;
+    if (params.maxPrice) query.price.$lte = params.maxPrice;
+  }
+
+  if (params.minMileage || params.maxMileage) {
+    query.mileage = {};
+    if (params.minMileage) query.mileage.$gte = params.minMileage;
+    if (params.maxMileage) query.mileage.$lte = params.maxMileage;
+  }
+
+  if (params.region) query.region = new RegExp(params.region, 'i');
+
+  if (params.minRegistrationDate || params.maxRegistrationDate) {
+    query.registrationDate = {};
+    if (params.minRegistrationDate) query.registrationDate.$gte = new Date(params.minRegistrationDate);
+    if (params.maxRegistrationDate) query.registrationDate.$lte = new Date(params.maxRegistrationDate);
+  }
+
+  return query;
 }
 
 export async function searchVehicles(

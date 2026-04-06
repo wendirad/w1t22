@@ -64,58 +64,9 @@ async function reconcileDealership(dealershipId: string) {
     status: PaymentStatus.COMPLETED,
   });
 
-  const invoiceByOrder = new Map(invoices.map((i) => [i.orderId.toString(), i]));
-  const paymentsByInvoice = new Map<string, typeof payments>();
-  for (const p of payments) {
-    const key = p.invoiceId.toString();
-    if (!paymentsByInvoice.has(key)) paymentsByInvoice.set(key, []);
-    paymentsByInvoice.get(key)!.push(p);
-  }
-
-  const discrepancies: Array<{ type: string; referenceId: any; details: string }> = [];
-  const unmatchedOrders: any[] = [];
-  const unmatchedInvoices: any[] = [];
+  const { matchedCount, discrepancies, unmatchedOrders, unmatchedInvoices } =
+    matchOrdersInvoicesPayments(orders, invoices, payments);
   const unmatchedSettlements: any[] = [];
-  let matchedCount = 0;
-
-  for (const order of orders) {
-    const invoice = invoiceByOrder.get(order._id.toString());
-    if (!invoice) {
-      unmatchedOrders.push(order._id);
-      discrepancies.push({
-        type: 'missing_invoice',
-        referenceId: order._id,
-        details: `Order ${order.orderNumber} has no invoice`,
-      });
-      continue;
-    }
-
-    const orderPayments = paymentsByInvoice.get(invoice._id.toString()) || [];
-    const paidAmount = orderPayments.reduce((sum, p) => sum + p.amount, 0);
-
-    if (orderPayments.length === 0) {
-      unmatchedInvoices.push(invoice._id);
-      discrepancies.push({
-        type: 'unpaid_invoice',
-        referenceId: invoice._id,
-        details: `Invoice ${invoice.invoiceNumber} has no payments`,
-      });
-    } else if (paidAmount !== invoice.total) {
-      discrepancies.push({
-        type: 'amount_mismatch',
-        referenceId: invoice._id,
-        details: `Invoice ${invoice.invoiceNumber}: expected ${invoice.total}, paid ${paidAmount}`,
-      });
-    } else if (invoice.total !== order.totals.total) {
-      discrepancies.push({
-        type: 'order_invoice_mismatch',
-        referenceId: order._id,
-        details: `Order ${order.orderNumber} total (${order.totals.total}) != Invoice total (${invoice.total})`,
-      });
-    } else {
-      matchedCount++;
-    }
-  }
 
   const status =
     discrepancies.length > 0 ? 'completed_with_discrepancies' : 'completed';
@@ -154,4 +105,86 @@ async function reconcileDealership(dealershipId: string) {
   );
 
   return run;
+}
+
+/**
+ * Pure matching logic — no database access. Extracted so unit tests can import
+ * and exercise the real production matching algorithm without a running MongoDB.
+ */
+export interface ReconciliationRecord {
+  _id: { toString(): string };
+  orderNumber?: string;
+  orderId?: { toString(): string };
+  invoiceId?: { toString(): string };
+  invoiceNumber?: string;
+  total?: number;
+  amount?: number;
+  totals?: { total: number };
+}
+
+export interface ReconciliationMatchResult {
+  matchedCount: number;
+  discrepancies: Array<{ type: string; referenceId: any; details: string }>;
+  unmatchedOrders: any[];
+  unmatchedInvoices: any[];
+}
+
+export function matchOrdersInvoicesPayments(
+  orders: any[],
+  invoices: any[],
+  payments: any[],
+): ReconciliationMatchResult {
+  const invoiceByOrder = new Map(invoices.map((i: any) => [i.orderId.toString(), i]));
+  const paymentsByInvoice = new Map<string, any[]>();
+  for (const p of payments) {
+    const key = p.invoiceId.toString();
+    if (!paymentsByInvoice.has(key)) paymentsByInvoice.set(key, []);
+    paymentsByInvoice.get(key)!.push(p);
+  }
+
+  const discrepancies: Array<{ type: string; referenceId: any; details: string }> = [];
+  const unmatchedOrders: any[] = [];
+  const unmatchedInvoices: any[] = [];
+  let matchedCount = 0;
+
+  for (const order of orders) {
+    const invoice = invoiceByOrder.get(order._id.toString());
+    if (!invoice) {
+      unmatchedOrders.push(order._id);
+      discrepancies.push({
+        type: 'missing_invoice',
+        referenceId: order._id,
+        details: `Order ${order.orderNumber} has no invoice`,
+      });
+      continue;
+    }
+
+    const orderPayments = paymentsByInvoice.get(invoice._id.toString()) || [];
+    const paidAmount = orderPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
+
+    if (orderPayments.length === 0) {
+      unmatchedInvoices.push(invoice._id);
+      discrepancies.push({
+        type: 'unpaid_invoice',
+        referenceId: invoice._id,
+        details: `Invoice ${invoice.invoiceNumber} has no payments`,
+      });
+    } else if (paidAmount !== invoice.total) {
+      discrepancies.push({
+        type: 'amount_mismatch',
+        referenceId: invoice._id,
+        details: `Invoice ${invoice.invoiceNumber}: expected ${invoice.total}, paid ${paidAmount}`,
+      });
+    } else if (invoice.total !== order.totals.total) {
+      discrepancies.push({
+        type: 'order_invoice_mismatch',
+        referenceId: order._id,
+        details: `Order ${order.orderNumber} total (${order.totals.total}) != Invoice total (${invoice.total})`,
+      });
+    } else {
+      matchedCount++;
+    }
+  }
+
+  return { matchedCount, discrepancies, unmatchedOrders, unmatchedInvoices };
 }

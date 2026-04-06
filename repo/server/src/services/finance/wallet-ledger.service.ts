@@ -101,6 +101,30 @@ export async function recordTransaction(params: {
   }
 }
 
+/**
+ * Pure idempotency key derivation — exported so unit tests can verify the
+ * exact format without a database. The production recordTransaction uses these
+ * keys for debit and credit entries respectively.
+ */
+export function deriveIdempotencyKeys(baseKey: string): { debitKey: string; creditKey: string } {
+  return {
+    debitKey: `${baseKey}-debit`,
+    creditKey: `${baseKey}-credit`,
+  };
+}
+
+/**
+ * Pure accounting equation check — exported for unit tests.
+ * Given a series of transactions, verifies that total debits equal total credits.
+ */
+export function verifyAccountingEquation(
+  transactions: Array<{ type: 'debit' | 'credit'; amount: number }>
+): { balanced: boolean; totalDebits: number; totalCredits: number } {
+  const totalDebits = transactions.filter((t) => t.type === 'debit').reduce((s, t) => s + t.amount, 0);
+  const totalCredits = transactions.filter((t) => t.type === 'credit').reduce((s, t) => s + t.amount, 0);
+  return { balanced: totalDebits === totalCredits, totalDebits, totalCredits };
+}
+
 export async function getTransactionHistory(
   accountId: string,
   limit: number = 50
