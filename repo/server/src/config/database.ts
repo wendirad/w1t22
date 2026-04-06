@@ -7,6 +7,26 @@ export async function connectDatabase(): Promise<void> {
     await mongoose.connect(config.mongodbUri);
     logger.info('Connected to MongoDB');
 
+    // --- Schema migrations for existing databases ---
+
+    // OrderEvent: drop old indexes that enforced ObjectId constraints on
+    // orderId and triggeredBy. The new schema uses Mixed for orderId (nullable)
+    // and String for triggeredBy (accepts 'system' for automated events).
+    try {
+      const db = mongoose.connection.db;
+      if (db) {
+        const collections = await db.listCollections({ name: 'orderevents' }).toArray();
+        if (collections.length > 0) {
+          const eventsCol = db.collection('orderevents');
+          // Remove any collection-level validator that might reject null orderId
+          // or non-ObjectId triggeredBy values
+          await db.command({ collMod: 'orderevents', validator: {} }).catch(() => {});
+        }
+      }
+    } catch (migErr: any) {
+      logger.warn({ error: migErr.message }, 'OrderEvent migration check (non-fatal)');
+    }
+
     // Drop the old compound (email, dealershipId) unique index if it exists.
     // Email is now globally unique; the old index allowed cross-tenant duplicates
     // that broke login determinism. Mongoose will create the new email-only index

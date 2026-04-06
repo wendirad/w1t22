@@ -138,10 +138,11 @@ export async function createOrderFromCart(
     // Persist a reservation-failure event outside the aborted transaction so
     // the audit trail shows *what* failed and *when* the revert completed.
     await OrderEventModel.create({
-      orderId: null as any,
+      orderId: null,
       fromStatus: null,
       toStatus: 'reservation_failed',
       triggeredBy: userId,
+      actorType: 'system',
       reason: `Inventory reservation failed: ${error.message}`,
       rolledBack: true,
       rolledBackAt: new Date(),
@@ -274,6 +275,7 @@ async function executeSaga(steps: SagaStep[], orderId: string): Promise<SagaResu
         fromStatus: 'rollback',
         toStatus: deadlineExceeded ? 'rollback_deadline_exceeded' : 'rollback_completed',
         triggeredBy: 'system',
+        actorType: 'system',
         reason: `Saga failed at step "${step.name}": ${error.message}`,
         rolledBack: true,
         rolledBackAt: rollbackCompletedAt,

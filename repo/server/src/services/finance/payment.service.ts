@@ -103,6 +103,7 @@ export async function processPayment(input: PaymentInput) {
         fromStatus: order.status,
         toStatus: order.status, // order status unchanged — only payment reverted
         triggeredBy: 'system',
+        actorType: 'system',
         reason: `Payment failed (${adapter.name}/${input.method}): ${
           adapterResult.metadata?.reason || 'charge declined'
         }`,
