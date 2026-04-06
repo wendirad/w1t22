@@ -165,9 +165,13 @@ echo "========================================"
 echo ""
 echo "Running API Tests..."
 echo "----------------------------------------"
-echo "Waiting for server at ${API_URL:-http://localhost:5000}..."
+echo "Waiting for server at ${API_URL:-http://server:5000}..."
 
-node API_tests/api-tests.js
+docker compose run --rm --no-deps -T \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  -e API_URL=http://server:5000 \
+  server node API_tests/api-tests.js
 API_EXIT=$?
 if [ $API_EXIT -eq 0 ]; then
   API_PASSED=$((API_PASSED + 1))
@@ -181,7 +185,11 @@ echo ""
 echo "Running Integration Tests..."
 echo "----------------------------------------"
 
-node API_tests/integration-tests.js
+docker compose run --rm --no-deps -T \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  -e API_URL=http://server:5000 \
+  server node API_tests/integration-tests.js
 INTEG_EXIT=$?
 if [ $INTEG_EXIT -eq 0 ]; then
   API_PASSED=$((API_PASSED + 1))
