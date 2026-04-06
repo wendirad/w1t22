@@ -65,15 +65,26 @@ All secrets and credentials are externalized to `.env`. See `.env.example` for t
 
 ## Running Tests
 
+**Full test run (requires all services running):**
+
 ```bash
+docker compose up -d
 ./run_tests.sh
 ```
 
-This executes:
-- **Unit tests** (`unit_tests/`): State machine transitions, permission resolver, encryption round-trips, synonym expansion, tax calculation, wallet ledger
-- **API tests** (`API_tests/`): Auth flows, vehicle CRUD, search, cart, order lifecycle, finance, privacy, permission enforcement
+**Exit codes from `run_tests.sh`:**
+| Code | Meaning |
+|------|---------|
+| `0`  | All tests passed (unit + API) |
+| `1`  | One or more test suites failed |
+| `2`  | API test suites were skipped because the server was not reachable — **this is not a pass** |
 
-The script prints a clear PASS/FAIL summary at the end.
+The script explicitly distinguishes **passed**, **failed**, and **skipped** suites. Skipped API tests are never counted as passed. If the server is not running, the final summary will report `INCOMPLETE` and exit with code `2`, making it clear that API tests did not execute.
+
+**What the test suites cover:**
+- **Unit tests** (`unit_tests/`): Run without a server. State machine transitions, permission resolver, encryption round-trips, HMAC verification, synonym expansion, tax calculation, wallet ledger, rollback compensation, request validation, document permissions, audit log sanitization.
+- **API tests** (`API_tests/api-tests.js`): Require a running server. Authentication flows, HMAC enforcement on all routes, role-based access on all admin endpoints, vehicle/search/cart/order lifecycle, finance, privacy, A/B experiment assignment, pagination stability.
+- **Integration tests** (`API_tests/integration-tests.js`): Require a running server. Multi-user object-level authorization, cross-tenant search isolation, document sharing privilege constraints, rollback traceability, permission override management, discrepancy tickets, full A/B experiment lifecycle.
 
 ## Features
 

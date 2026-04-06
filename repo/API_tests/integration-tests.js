@@ -658,10 +658,15 @@ function waitForServer(retries = 10, delay = 2000) {
   });
 }
 
+// Exit code convention:
+//   0 = all tests passed
+//   1 = one or more tests failed
+//   3 = skipped (server not reachable) — distinct from pass/fail so the
+//       runner script can report skips accurately instead of counting them as passes
 waitForServer()
   .then(() => runTests())
   .catch((e) => {
     console.warn(`SKIPPED: Integration tests require a running server (${e.message})`);
     console.warn('Start the server and re-run to execute integration tests.');
-    process.exit(0);
+    process.exit(3);
   });
